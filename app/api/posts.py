@@ -38,8 +38,10 @@ router = APIRouter(prefix="/posts", tags=["posts"])
 # Helpers
 # =============================================================================
 
-def _row_to_post(row: dict) -> PostResponse:
+def _row_to_post(row) -> PostResponse:
     """Convert DB row to PostResponse."""
+    # Convert sqlite3.Row to dict for .get() support
+    row = dict(row)
     metadata = json.loads(row.get("metadata") or "{}")
 
     # Parse platforms and channel_ids from metadata

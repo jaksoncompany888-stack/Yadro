@@ -27,8 +27,10 @@ from .models import (
 router = APIRouter(prefix="/calendar", tags=["calendar"])
 
 
-def _row_to_post(row: dict) -> PostResponse:
+def _row_to_post(row) -> PostResponse:
     """Convert DB row to PostResponse."""
+    # Convert sqlite3.Row to dict for .get() support
+    row = dict(row)
     metadata = json.loads(row.get("metadata") or "{}")
 
     platforms = metadata.get("platforms", ["telegram"])
