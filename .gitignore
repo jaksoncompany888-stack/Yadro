@@ -16,6 +16,11 @@ data/uploads/*
 !data/outputs/.gitkeep
 !data/uploads/.gitkeep
 
+# Node
+node_modules/
+webapp/node_modules/
+webapp/dist/
+
 # Python
 __pycache__/
 *.pyc
