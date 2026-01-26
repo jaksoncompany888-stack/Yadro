@@ -65,13 +65,12 @@ def get_llm(db: Database = Depends(get_db)) -> LLMService:
 
 def get_agent(
     db: Database = Depends(get_db),
-    memory: MemoryService = Depends(get_memory),
     llm: LLMService = Depends(get_llm),
 ) -> SMMAgent:
     """Get SMM agent."""
     global _agent
     if _agent is None:
-        _agent = SMMAgent(db=db, llm=llm, memory=memory)
+        _agent = SMMAgent(db=db, llm=llm)
     return _agent
 
 
