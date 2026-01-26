@@ -6,7 +6,7 @@ import asyncio
 import tempfile
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from aiogram.enums import ParseMode
@@ -26,6 +26,7 @@ from app.kernel.task_manager import TaskLimitError
 # Config
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "")  # URL для Mini App (например: https://your-domain.com)
 
 # Init
 db = Database("data/smm_agent.db")
@@ -49,14 +50,19 @@ user_states = {}  # {tg_id: {"state": "...", "data": {...}}}
 pending_posts = {}  # {tg_id: PostDraft}
 
 # Главное меню — МИНИМУМ
-main_menu = ReplyKeyboardMarkup(
-    keyboard=[
+def get_main_menu():
+    """Создаёт главное меню с учётом наличия Mini App."""
+    keyboard = [
         [KeyboardButton(text="🎤 Создать пост")],
         [KeyboardButton(text="💡 Идеи на сегодня"), KeyboardButton(text="📋 Черновики")],
         [KeyboardButton(text="⚙️")]
-    ],
-    resize_keyboard=True
-)
+    ]
+    # Добавляем кнопку календаря если настроен WEBAPP_URL
+    if WEBAPP_URL:
+        keyboard.insert(0, [KeyboardButton(text="📅 Календарь", web_app=WebAppInfo(url=WEBAPP_URL))])
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+main_menu = get_main_menu()
 
 # Настройки — всё остальное
 settings_menu = ReplyKeyboardMarkup(
@@ -182,6 +188,15 @@ def edit_keyboard(task_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="✅ Готово", callback_data=f"pub_{task_id}"),
             InlineKeyboardButton(text="📋 В черновики", callback_data=f"draft_{task_id}")
         ]
+    ])
+
+
+def calendar_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура с кнопкой открытия календаря (Mini App)"""
+    if not WEBAPP_URL:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📅 Открыть календарь", web_app=WebAppInfo(url=WEBAPP_URL))]
     ])
 
 
@@ -648,6 +663,30 @@ async def cmd_drafts(message: Message):
         await message.answer(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
     except:
         await message.answer(text, reply_markup=keyboard, parse_mode=None)
+
+
+@dp.message(Command("calendar"))
+async def cmd_calendar(message: Message):
+    """Открыть календарь (Mini App)"""
+    if not WEBAPP_URL:
+        await message.answer(
+            "Календарь пока не настроен.\n\n"
+            "Для настройки укажите WEBAPP_URL в .env",
+            parse_mode=None
+        )
+        return
+
+    keyboard = calendar_keyboard()
+    await message.answer(
+        "📅 Планировщик постов\n\n"
+        "Здесь можно:\n"
+        "• Посмотреть расписание на неделю\n"
+        "• Создать и запланировать посты\n"
+        "• Перетащить посты на другую дату\n"
+        "• Использовать AI для генерации",
+        reply_markup=keyboard,
+        parse_mode=None
+    )
 
 
 # ==================== ГОЛОСОВЫЕ ====================
