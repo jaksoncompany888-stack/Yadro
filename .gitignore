@@ -1,0 +1,50 @@
+# Secrets
+.env
+
+# Database
+*.db
+*.db-*
+*.sqlite3
+data/*.db
+data/*.sqlite3
+
+# Data folders content (keep structure)
+data/snapshots/*
+data/outputs/*
+data/uploads/*
+!data/snapshots/.gitkeep
+!data/outputs/.gitkeep
+!data/uploads/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temp
+*.tmp
+*.temp
+
+# Personal files (remove after setup)
+cd.docx
+backup_*.md
