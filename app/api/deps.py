@@ -59,7 +59,7 @@ def get_llm(db: Database = Depends(get_db)) -> LLMService:
     global _llm
     if _llm is None:
         api_key = os.environ.get("OPENAI_API_KEY")
-        _llm = LLMService(db, openai_api_key=api_key)
+        _llm = LLMService(db, openai_api_key=api_key, mock_mode=False)
     return _llm
 
 
