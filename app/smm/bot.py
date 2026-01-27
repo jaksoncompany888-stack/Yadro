@@ -494,13 +494,14 @@ async def cb_competitor_menu(callback: CallbackQuery):
 @dp.callback_query(F.data.startswith("analyze_comp_"))
 async def cb_analyze_competitor(callback: CallbackQuery):
     """Глубокий анализ конкурента"""
+    await callback.answer()  # Сразу отвечаем, чтобы не протух callback
+
     # Формат: analyze_comp_{id}_{channel}
     parts = callback.data.replace("analyze_comp_", "").split("_", 1)
     channel = parts[1] if len(parts) > 1 else ""
     user_id = get_user_id(callback.from_user.id)
 
-    await callback.message.edit_text(f"Анализирую {channel}...\n\nЭто займёт немного времени.", parse_mode=None)
-    await callback.answer()
+    await callback.message.edit_text(f"⏳ Анализирую {channel}...\n\nЭто займёт немного времени.", parse_mode=None)
 
     try:
         raw_posts, analysis = agent.analyze_single_channel(user_id, channel)
