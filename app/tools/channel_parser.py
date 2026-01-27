@@ -68,9 +68,14 @@ class ChannelParser:
 
             # Реакции (сумма всех)
             reactions = 0
-            reaction_els = msg.select('.tgme_widget_message_reaction_count')
+            reaction_els = msg.select('.tgme_reaction')
             for r in reaction_els:
-                reactions += self._parse_views(r.get_text(strip=True))
+                # Текст внутри span содержит число после эмодзи
+                r_text = r.get_text(strip=True)
+                # Извлекаем только цифры из текста
+                nums = re.findall(r'\d+', r_text)
+                if nums:
+                    reactions += int(nums[-1])  # Берём последнее число (количество)
 
             # Репосты/форварды
             forwards = 0
