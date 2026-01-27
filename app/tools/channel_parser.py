@@ -122,7 +122,9 @@ class ChannelParser:
         subscribers = 0
         if subs_el:
             subs_text = subs_el.get_text(strip=True)
-            subscribers = self._parse_views(subs_text.split()[0])
+            # Убираем слова типа "subscribers", "members" и т.д.
+            subs_num = re.sub(r'[^\d.KMkm]', '', subs_text.split()[0] if ' ' in subs_text else subs_text)
+            subscribers = self._parse_views(subs_num) if subs_num else 0
 
         # Описание
         desc_el = soup.select_one('.tgme_channel_info_description')
