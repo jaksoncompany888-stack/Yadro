@@ -253,10 +253,27 @@ function PostCard({ post, onClick, onDragStart, onDragEnd, isDragging }) {
     ? format(new Date(post.publish_at), 'HH:mm')
     : '—'
 
+  // Только scheduled и draft можно перемещать
+  const canDrag = post.status === 'scheduled' || post.status === 'draft'
+
+  const handleDragStart = (e) => {
+    if (!canDrag) {
+      e.preventDefault()
+      return
+    }
+    e.dataTransfer.effectAllowed = 'move'
+    onDragStart(post)
+  }
+
   return (
     <div
+      draggable={canDrag}
+      onDragStart={handleDragStart}
+      onDragEnd={onDragEnd}
       onClick={onClick}
-      className="bg-white rounded-lg p-3 cursor-pointer hover:shadow-md transition-shadow"
+      className={`bg-white rounded-lg p-3 cursor-pointer hover:shadow-md transition-all ${
+        isDragging ? 'opacity-50 scale-95' : ''
+      } ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''}`}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">

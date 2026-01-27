@@ -228,12 +228,18 @@ async def cmd_start(message: Message):
     channel = agent.get_channel_id(user_id)
 
     if not channel:
-        # Новый пользователь — онбординг
+        # Новый пользователь — онбординг с инструкцией
         user_states[message.from_user.id] = {"state": "onboarding_channel"}
         await message.answer(
-            "Привет! Я твой SMM-агент.\n\n"
-            "Подключи канал — перешли любой пост из него или напиши @username",
-            parse_mode=None,
+            "Привет! Я SMM-агент, который пишет посты в твоём стиле.\n\n"
+            "<b>Что я умею:</b>\n"
+            "• Генерировать посты по теме (текстом или голосом)\n"
+            "• Запоминать твой стиль и учиться на фидбеке\n"
+            "• Анализировать конкурентов и брать лучшее\n"
+            "• Редактировать посты по команде\n\n"
+            "<b>Начнём настройку:</b>\n"
+            "Подключи свой канал — перешли любой пост из него или напиши @username",
+            parse_mode="HTML",
             reply_markup=ReplyKeyboardRemove()
         )
     else:

@@ -23,6 +23,11 @@ class ApprovalRequired(Exception):
 def _markdown_to_html(text: str) -> str:
     """Конвертация markdown в HTML для Telegram. Архитектурное решение."""
     import re
+
+    # Убираем markdown заголовки (### Идея → Идея)
+    # LLM часто отвечает с ### для структуры — убираем решётки
+    text = re.sub(r'^#{1,6}\s*', '', text, flags=re.MULTILINE)
+
     # Порядок важен! Сначала двойные, потом одинарные
     # __bold__ → <b>bold</b>
     text = re.sub(r'__([^_]+?)__', r'<b>\1</b>', text)

@@ -1,0 +1,21 @@
+services:
+  # Combined API + Bot (single service = shared disk)
+  - type: web
+    name: yadro-smm
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python run_all.py
+    healthCheckPath: /health
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: DATABASE_PATH
+        value: /data/yadro.db
+      - key: APP_ENV
+        value: production
+    disk:
+      name: yadro-data
+      mountPath: /data
+      sizeGB: 1
