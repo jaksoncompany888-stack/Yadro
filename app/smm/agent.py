@@ -1254,6 +1254,14 @@ class SMMAgent:
 
     # ==================== АНАЛИЗ КОНКУРЕНТОВ ====================
 
+    def _format_number(self, num: int) -> str:
+        """Форматирует число: 1500 -> 1.5K, 1500000 -> 1.5M"""
+        if num >= 1000000:
+            return f"{num/1000000:.1f}M"
+        elif num >= 1000:
+            return f"{num/1000:.1f}K"
+        return str(num)
+
     def _is_ad_post(self, text: str) -> bool:
         """Проверка на рекламный пост."""
         ad_markers = [
@@ -1267,11 +1275,42 @@ class SMMAgent:
     def analyze_single_channel(self, user_id: int, channel: str) -> tuple:
         """Анализ одного канала. Возвращает (raw_posts, analysis)."""
         try:
+            # Получаем инфо о канале (подписчики)
+            channel_info = self.parser.get_channel_info(channel)
+            subscribers = channel_info.get('subscribers', 0)
+            channel_title = channel_info.get('title', channel)
+
             posts = self.parser.get_top_posts(channel, limit=20)
             organic_posts = [p for p in posts if not self._is_ad_post(p.text)][:15]
 
             if not organic_posts:
                 return "", f"Не найдено органических постов в {channel}"
+
+            # Считаем метрики
+            views = [p.views for p in organic_posts]
+            reactions = [p.reactions for p in organic_posts]
+            forwards = [p.forwards for p in organic_posts]
+
+            avg_views = sum(views) // len(views) if views else 0
+            avg_reactions = sum(reactions) // len(reactions) if reactions else 0
+            avg_forwards = sum(forwards) // len(forwards) if forwards else 0
+            max_views = max(views) if views else 0
+
+            # Engagement rate
+            engagement = 0
+            if avg_views > 0:
+                engagement = round((avg_reactions + avg_forwards) / avg_views * 100, 2)
+
+            # Формируем статистику
+            stats_text = (
+                f"<b>📊 {channel_title}</b>\n"
+                f"👥 Подписчики: <b>{self._format_number(subscribers)}</b>\n"
+                f"👁 Просмотры: <b>{self._format_number(avg_views)}</b> (макс: {self._format_number(max_views)})\n"
+                f"❤️ Реакции: <b>{self._format_number(avg_reactions)}</b> в среднем\n"
+                f"🔄 Репосты: <b>{self._format_number(avg_forwards)}</b> в среднем\n"
+                f"📈 Engagement: <b>{engagement}%</b>\n"
+                f"─ ─ ─ ─ ─ ─ ─ ─ ─ ─\n"
+            )
 
             posts_list = []
             for p in organic_posts:
@@ -1303,6 +1342,9 @@ class SMMAgent:
             # Конвертируем markdown → HTML
             analysis = _markdown_to_html(response.content)
 
+            # Полный анализ = статистика + AI-анализ
+            full_analysis = stats_text + analysis
+
             # Сохраняем анализ (унифицированный формат)
             self.memory.store(
                 user_id=user_id,
@@ -1312,7 +1354,7 @@ class SMMAgent:
                 metadata={"channel": channel, "analysis_version": "v1"}
             )
 
-            return posts_text, analysis
+            return posts_text, full_analysis
 
         except Exception as e:
             return "", f"Ошибка анализа {channel}: {e}"

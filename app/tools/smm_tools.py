@@ -298,9 +298,25 @@ def register_smm_tools(
             all_words.extend([w for w in words if w not in stop_words])
         top_words = [w for w, _ in Counter(all_words).most_common(10)]
 
-        # 8. Просмотры (если есть)
+        # 8. Просмотры
         views = [p.get('views', 0) for p in organic if p.get('views')]
         avg_views = sum(views) // len(views) if views else 0
+        max_views = max(views) if views else 0
+        min_views = min(views) if views else 0
+
+        # 9. Реакции
+        reactions = [p.get('reactions', 0) for p in organic]
+        avg_reactions = sum(reactions) // len(reactions) if reactions else 0
+        total_reactions = sum(reactions)
+
+        # 10. Репосты
+        forwards = [p.get('forwards', 0) for p in organic]
+        avg_forwards = sum(forwards) // len(forwards) if forwards else 0
+
+        # 11. Engagement rate (реакции + репосты / просмотры)
+        engagement = 0
+        if avg_views > 0:
+            engagement = round((avg_reactions + avg_forwards) / avg_views * 100, 2)
 
         return {
             "posts_analyzed": len(organic),
@@ -316,6 +332,12 @@ def register_smm_tools(
                 "cta_style": cta_style,
                 "top_words": top_words,
                 "avg_views": avg_views,
+                "max_views": max_views,
+                "min_views": min_views,
+                "avg_reactions": avg_reactions,
+                "total_reactions": total_reactions,
+                "avg_forwards": avg_forwards,
+                "engagement_rate": engagement,
             },
             "examples": {
                 "hooks": first_lines[:3],

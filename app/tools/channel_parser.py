@@ -14,6 +14,8 @@ class ChannelPost:
     views: int
     date: str
     url: str
+    reactions: int = 0  # общее кол-во реакций
+    forwards: int = 0   # репосты
 
 
 class ChannelParser:
@@ -64,12 +66,26 @@ class ChannelParser:
             link_el = msg.select_one('.tgme_widget_message_date')
             post_url = link_el.get('href', '') if link_el else ""
 
+            # Реакции (сумма всех)
+            reactions = 0
+            reaction_els = msg.select('.tgme_widget_message_reaction_count')
+            for r in reaction_els:
+                reactions += self._parse_views(r.get_text(strip=True))
+
+            # Репосты/форварды
+            forwards = 0
+            forward_el = msg.select_one('.tgme_widget_message_forwards')
+            if forward_el:
+                forwards = self._parse_views(forward_el.get_text(strip=True))
+
             if text:
                 posts.append(ChannelPost(
                     text=text[:500],
                     views=views,
                     date=date,
-                    url=post_url
+                    url=post_url,
+                    reactions=reactions,
+                    forwards=forwards
                 ))
 
         return posts
@@ -83,6 +99,40 @@ class ChannelParser:
             return int(float(views_str.replace('M', '')) * 1000000)
         else:
             return int(re.sub(r'[^\d]', '', views_str) or 0)
+
+    def get_channel_info(self, channel: str) -> dict:
+        """Получить информацию о канале: название, подписчики, описание"""
+        username = channel.replace("@", "").replace("https://t.me/", "")
+        url = f"https://t.me/s/{username}"
+
+        try:
+            resp = self.session.get(url, timeout=15)
+            resp.raise_for_status()
+        except Exception:
+            return {"subscribers": 0, "title": username, "description": ""}
+
+        soup = BeautifulSoup(resp.text, 'html.parser')
+
+        # Название канала
+        title_el = soup.select_one('.tgme_channel_info_header_title')
+        title = title_el.get_text(strip=True) if title_el else username
+
+        # Подписчики
+        subs_el = soup.select_one('.tgme_channel_info_counter')
+        subscribers = 0
+        if subs_el:
+            subs_text = subs_el.get_text(strip=True)
+            subscribers = self._parse_views(subs_text.split()[0])
+
+        # Описание
+        desc_el = soup.select_one('.tgme_channel_info_description')
+        description = desc_el.get_text(strip=True) if desc_el else ""
+
+        return {
+            "title": title,
+            "subscribers": subscribers,
+            "description": description[:200]
+        }
 
     def get_top_posts(self, channel: str, limit: int = 5) -> List[ChannelPost]:
         """Получить топ постов по просмотрам"""
