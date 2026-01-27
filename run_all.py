@@ -7,6 +7,10 @@ import asyncio
 import threading
 import os
 import uvicorn
+from dotenv import load_dotenv
+
+# Load .env file
+load_dotenv()
 
 
 def run_api():
