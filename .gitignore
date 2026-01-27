@@ -50,8 +50,6 @@ Thumbs.db
 *.tmp
 *.temp
 
-# Personal files (remove after setup)
-cd.docx
-backup_*.md
-CLAUDE.md
-render.env
+# Artifacts
+need_help_*.png
+*.pem

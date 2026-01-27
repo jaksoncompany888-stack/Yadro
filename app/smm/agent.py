@@ -933,6 +933,7 @@ class SMMAgent:
             r'без\s+хештег',
             r'без\s+хэштег',
             r'замени\s+.+\s+на\s+',
+            r'вместо\s+.+\s+(поставь|сделай|вставь)',
         ]
 
         for pattern in precise_patterns:
@@ -1084,12 +1085,43 @@ class SMMAgent:
                 print(f"[Edit] ℹ precise: хештегов нет")
 
         # === ЗАМЕНА ===
+        # Паттерны: "замени X на Y", "вместо X поставь Y", "X замени на Y"
         replace_match = re.search(r'замени\s+(.+?)\s+на\s+(.+?)(?:\s*$|\s*,)', request, re.IGNORECASE)
+        if not replace_match:
+            replace_match = re.search(r'вместо\s+(.+?)\s+(?:поставь|сделай|вставь)\s+(.+?)(?:\s*$|\s*,)', request, re.IGNORECASE)
+
         if replace_match:
-            old, new = replace_match.group(1).strip(), replace_match.group(2).strip()
-            if old in result:
-                result = result.replace(old, new, 1)
-                print(f"[Edit] ✓ precise: заменено '{old}' → '{new}'")
+            old_text, new_text = replace_match.group(1).strip(), replace_match.group(2).strip()
+
+            # Если это названия эмодзи — конвертируем в эмодзи
+            emoji_map = {
+                'сердечк': '💖', 'сердц': '❤️', 'огонек': '🔥', 'огонёк': '🔥', 'огон': '🔥',
+                'звезд': '⭐', 'звёзд': '🌟', 'солнц': '☀️', 'радуг': '🌈',
+                'цветочек': '🌸', 'цвет': '🌸', 'роз': '🌹', 'ракет': '🚀',
+            }
+
+            # Ищем эмодзи по названию для old
+            for name, emoji in emoji_map.items():
+                if name in old_text.lower():
+                    # Ищем любой эмодзи-сердце/огонь и т.п. в тексте
+                    if name.startswith('сердц') or name.startswith('сердеч'):
+                        for em in ['💖', '❤️', '💕', '💗', '💓', '💘', '🩷', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎']:
+                            if em in result:
+                                old_text = em
+                                break
+                    elif emoji in result:
+                        old_text = emoji
+                    break
+
+            # Ищем эмодзи по названию для new
+            for name, emoji in emoji_map.items():
+                if name in new_text.lower():
+                    new_text = emoji
+                    break
+
+            if old_text in result:
+                result = result.replace(old_text, new_text, 1)
+                print(f"[Edit] ✓ precise: заменено '{old_text}' → '{new_text}'")
 
         return result
 

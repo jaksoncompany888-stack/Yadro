@@ -59,8 +59,8 @@ class PostCreate(BaseModel):
     publish_at: Optional[datetime] = None  # None = draft, datetime = scheduled
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
-    class Config:
-        json_schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "text": "Новый пост для канала!",
                 "topic": "продуктивность",
@@ -72,6 +72,7 @@ class PostCreate(BaseModel):
                 "publish_at": "2025-01-27T10:00:00Z"
             }
         }
+    }
 
 
 class PostUpdate(BaseModel):
@@ -106,8 +107,7 @@ class PostResponse(BaseModel):
     published_urls: Dict[Platform, str] = Field(default_factory=dict)  # platform -> url
     error_message: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class PostList(BaseModel):

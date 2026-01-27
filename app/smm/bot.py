@@ -64,11 +64,10 @@ def get_main_menu():
 
 main_menu = get_main_menu()
 
-# Настройки — всё остальное
+# Настройки — убрали Стиль и Источники (пока не готовы)
 settings_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📺 Сменить канал"), KeyboardButton(text="👥 Конкуренты")],
-        [KeyboardButton(text="📰 Источники"), KeyboardButton(text="🎨 Стиль")],
         [KeyboardButton(text="🔙 Назад")]
     ],
     resize_keyboard=True
@@ -227,24 +226,37 @@ async def cmd_start(message: Message):
     user_id = get_user_id(message.from_user.id)
     channel = agent.get_channel_id(user_id)
 
+    # Всегда показываем полную инструкцию
+    instruction = (
+        "Привет! Я SMM-агент, который пишет посты в твоём стиле.\n\n"
+        "<b>🎯 Главные кнопки:</b>\n"
+        "• <b>🎤 Создать пост</b> — напиши тему или голосовое\n"
+        "• <b>💡 Идеи на сегодня</b> — 3 идеи для постов\n"
+        "• <b>📋 Черновики</b> — сохранённые посты\n"
+        "• <b>📅 Календарь</b> — (в разработке)\n"
+        "• <b>⚙️</b> — настройки\n\n"
+        "<b>💬 Когда создаёшь пост:</b>\n"
+        "• ✅ Опубликовать — сразу в канал\n"
+        "• 📋 В черновики — сохранить на потом\n"
+        "• ✏️ Изменить — скажи что поправить\n"
+        "• 🔄 Заново — другой вариант\n\n"
+    )
+
     if not channel:
-        # Новый пользователь — онбординг с инструкцией
+        # Нет канала — просим подключить
         user_states[message.from_user.id] = {"state": "onboarding_channel"}
         await message.answer(
-            "Привет! Я SMM-агент, который пишет посты в твоём стиле.\n\n"
-            "<b>Что я умею:</b>\n"
-            "• Генерировать посты по теме (текстом или голосом)\n"
-            "• Запоминать твой стиль и учиться на фидбеке\n"
-            "• Анализировать конкурентов и брать лучшее\n"
-            "• Редактировать посты по команде\n\n"
-            "<b>Начнём настройку:</b>\n"
-            "Подключи свой канал — перешли любой пост из него или напиши @username",
+            instruction + "<b>Начнём:</b>\nНапиши @username твоего канала",
             parse_mode="HTML",
             reply_markup=ReplyKeyboardRemove()
         )
     else:
-        # Уже настроен — главный экран
-        await show_main_screen(message)
+        # Канал есть — показываем меню
+        await message.answer(
+            instruction + "Напиши тему поста или нажми кнопку.",
+            parse_mode="HTML",
+            reply_markup=main_menu
+        )
 
 
 @dp.message(Command("channel"))
@@ -841,9 +853,11 @@ async def process_text_input(message: Message, text: str):
 
     # Шаг 1: Подключение канала
     if state == "onboarding_channel":
-        if text.startswith("@"):
-            channel_name = text
-            agent.save_channel(user_id, text, text)
+        # Принимаем и @channel и просто channel
+        clean_text = text.strip().lstrip("@")
+        if clean_text and not " " in clean_text:
+            channel_name = f"@{clean_text}"
+            agent.save_channel(user_id, channel_name, channel_name)
 
             await message.answer(f"Подключил {channel_name}. Анализирую...", parse_mode=None)
 
@@ -876,11 +890,18 @@ async def process_text_input(message: Message, text: str):
 
     # Шаг 2: Конкуренты (опционально)
     if state == "onboarding_competitors":
-        if text.startswith("@"):
-            channel = text
+        # Принимаем и @channel и просто channel
+        clean_text = text.strip().lstrip("@")
+        if clean_text and not " " in clean_text:
+            channel = f"@{clean_text}"
             agent.add_competitor(user_id, channel)
+
+            skip_btn = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Готово ✓", callback_data="skip_competitors")]
+            ])
             await message.answer(
-                f"Добавил {channel}. Ещё? Или нажми «Пропустить»",
+                f"Добавил {channel}. Ещё @username или нажми «Готово»",
+                reply_markup=skip_btn,
                 parse_mode=None
             )
             return
@@ -1205,7 +1226,22 @@ async def process_text_input(message: Message, text: str):
         return
 
     if agent.get_channel_id(user_id):
-        # Канал подключен — генерим пост
+        # Канал подключен
+        # Если это @username — спросим что делать (конкурент или тема)
+        clean_text = text.strip().lstrip("@")
+        if clean_text and " " not in clean_text and len(clean_text) >= 5 and text.startswith("@"):
+            # Похоже на @username — добавим как конкурента
+            channel = f"@{clean_text}"
+            agent.add_competitor(user_id, channel)
+            await message.answer(
+                f"Добавил {channel} в конкуренты для анализа стиля.\n\n"
+                "Напиши тему для поста или добавь ещё @канал.",
+                reply_markup=main_menu,
+                parse_mode=None
+            )
+            return
+
+        # Генерим пост
         await message.answer("Генерирую пост...", parse_mode=None)
 
         try:
@@ -1218,12 +1254,31 @@ async def process_text_input(message: Message, text: str):
 
         await send_post(message, draft.text, reply_markup=post_keyboard(draft.task_id))
     else:
-        # Канал не подключен — просим подключить
-        user_states[tg_id] = {"state": "onboarding_channel"}
-        await message.answer(
-            "Сначала подключи канал — перешли пост или напиши @username",
-            parse_mode=None
-        )
+        # Канал не подключен
+        # Если это @username — сразу подключаем канал
+        clean_text = text.strip().lstrip("@")
+        if clean_text and " " not in clean_text and len(clean_text) >= 3:
+            channel_name = f"@{clean_text}"
+            agent.save_channel(user_id, channel_name, channel_name)
+            await message.answer(f"Подключил {channel_name}. Анализирую...", parse_mode=None)
+
+            # Автоанализ канала
+            try:
+                raw, analysis = agent.analyze_single_channel(user_id, channel_name)
+                if analysis and "Ошибка" not in analysis:
+                    agent.save_style(user_id, f"Авто-анализ: {analysis[:500]}")
+                    await send_post(message, f"Понял стиль канала:\n\n{analysis[:1000]}")
+            except Exception:
+                await message.answer("Не смог прочитать канал, но это ок — буду учиться на твоих постах.", parse_mode=None)
+
+            await message.answer("Готово! Теперь напиши тему для поста.", reply_markup=main_menu, parse_mode=None)
+        else:
+            # Просим подключить
+            user_states[tg_id] = {"state": "onboarding_channel"}
+            await message.answer(
+                "Сначала подключи канал — напиши @username",
+                parse_mode=None
+            )
 
 
 @dp.message(F.text)

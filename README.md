@@ -93,7 +93,7 @@ OPENAI_API_KEY=...
 
 ### 5. Запусти бота
 ```bash
-python -m app.smm.bot
+python run_all.py  # бот + API вместе
 ```
 
 ## Команды бота
@@ -132,11 +132,8 @@ app/
 ## Тестирование
 
 ```bash
-# Все тесты (255 штук)
-pytest tests/ -q --ignore=tests/test_browser.py
-
-# Полный тест агента
-python test_agent_full.py
+# Все тесты (300+ штук)
+pytest tests/ -v
 ```
 
 ## Планы развития
