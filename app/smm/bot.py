@@ -5,9 +5,10 @@ import os
 import asyncio
 import tempfile
 from dotenv import load_dotenv
-from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from aiogram import Bot, Dispatcher, F, BaseMiddleware
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, TelegramObject
 from aiogram.filters import Command
+from typing import Callable, Dict, Any, Awaitable
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
@@ -28,6 +29,15 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 WEBAPP_URL = os.getenv("WEBAPP_URL", "")  # URL для Mini App (например: https://your-domain.com)
 
+# Белый список пользователей (Telegram ID)
+# Если пустой — доступ всем. Если заполнен — только этим пользователям.
+ALLOWED_USERS = os.getenv("ALLOWED_USERS", "")  # формат: "123456,789012,345678"
+ALLOWED_USER_IDS = set(int(x.strip()) for x in ALLOWED_USERS.split(",") if x.strip())
+
+# Лимиты запросов (защита API)
+DAILY_LIMIT_PER_USER = int(os.getenv("DAILY_LIMIT", "50"))  # генераций в день на пользователя
+user_usage = {}  # {tg_id: {"date": "2026-01-27", "count": 5}}
+
 # Init
 db = Database("data/smm_agent.db")
 llm = LLMService(db=db, mock_mode=False, openai_api_key=OPENAI_KEY)
@@ -44,6 +54,40 @@ register_smm_tools(
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN))
 dp = Dispatcher()
+
+
+class WhitelistMiddleware(BaseMiddleware):
+    """Middleware для проверки белого списка на ВСЕ входящие события."""
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: Dict[str, Any]
+    ) -> Any:
+        # Получаем user из события
+        user = None
+        if isinstance(event, Message):
+            user = event.from_user
+        elif isinstance(event, CallbackQuery):
+            user = event.from_user
+
+        if user:
+            tg_id = user.id
+            # Проверка белого списка
+            if ALLOWED_USER_IDS and tg_id not in ALLOWED_USER_IDS:
+                if isinstance(event, Message):
+                    await event.answer("🚫 Бот находится в закрытом тестировании.\n\nОбратитесь к разработчику для получения доступа.")
+                elif isinstance(event, CallbackQuery):
+                    await event.answer("Доступ закрыт", show_alert=True)
+                return  # Не продолжаем обработку
+
+        return await handler(event, data)
+
+
+# Регистрируем middleware
+dp.message.middleware(WhitelistMiddleware())
+dp.callback_query.middleware(WhitelistMiddleware())
 
 # Состояния
 user_states = {}  # {tg_id: {"state": "...", "data": {...}}}
@@ -80,6 +124,62 @@ def get_user_id(tg_id: int) -> int:
     if existing:
         return existing
     return db.execute("INSERT INTO users (tg_id, username) VALUES (?, ?)", (tg_id, f"user_{tg_id}"))
+
+
+def is_user_allowed(tg_id: int) -> bool:
+    """Проверка что пользователь в белом списке"""
+    if not ALLOWED_USER_IDS:
+        return True  # Белый список пустой — доступ всем
+    return tg_id in ALLOWED_USER_IDS
+
+
+def check_rate_limit(tg_id: int) -> bool:
+    """Проверка лимита запросов. Возвращает True если лимит не превышен."""
+    from datetime import date
+    today = date.today().isoformat()
+
+    if tg_id not in user_usage:
+        user_usage[tg_id] = {"date": today, "count": 0}
+
+    usage = user_usage[tg_id]
+
+    # Сброс счётчика на новый день
+    if usage["date"] != today:
+        usage["date"] = today
+        usage["count"] = 0
+
+    return usage["count"] < DAILY_LIMIT_PER_USER
+
+
+def increment_usage(tg_id: int):
+    """Увеличить счётчик использования"""
+    from datetime import date
+    today = date.today().isoformat()
+
+    if tg_id not in user_usage:
+        user_usage[tg_id] = {"date": today, "count": 0}
+
+    usage = user_usage[tg_id]
+    if usage["date"] != today:
+        usage["date"] = today
+        usage["count"] = 0
+
+    usage["count"] += 1
+
+
+def get_remaining_limit(tg_id: int) -> int:
+    """Сколько запросов осталось сегодня"""
+    from datetime import date
+    today = date.today().isoformat()
+
+    if tg_id not in user_usage:
+        return DAILY_LIMIT_PER_USER
+
+    usage = user_usage[tg_id]
+    if usage["date"] != today:
+        return DAILY_LIMIT_PER_USER
+
+    return max(0, DAILY_LIMIT_PER_USER - usage["count"])
 
 
 async def show_main_screen(message: Message):
@@ -223,37 +323,67 @@ async def transcribe_voice(voice_file_id: str) -> str:
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    user_id = get_user_id(message.from_user.id)
+    tg_id = message.from_user.id
+    user_id = get_user_id(tg_id)
     channel = agent.get_channel_id(user_id)
 
-    # Всегда показываем полную инструкцию
+    # Полная инструкция
     instruction = (
-        "Привет! Я SMM-агент, который пишет посты в твоём стиле.\n\n"
-        "<b>🎯 Главные кнопки:</b>\n"
-        "• <b>🎤 Создать пост</b> — напиши тему или голосовое\n"
-        "• <b>💡 Идеи на сегодня</b> — 3 идеи для постов\n"
-        "• <b>📋 Черновики</b> — сохранённые посты\n"
-        "• <b>📅 Календарь</b> — (в разработке)\n"
-        "• <b>⚙️</b> — настройки\n\n"
-        "<b>💬 Когда создаёшь пост:</b>\n"
-        "• ✅ Опубликовать — сразу в канал\n"
-        "• 📋 В черновики — сохранить на потом\n"
-        "• ✏️ Изменить — скажи что поправить\n"
-        "• 🔄 Заново — другой вариант\n\n"
+        "<b>Yadro — AI-агент для ведения Telegram-каналов</b>\n\n"
+
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "<b>🚀 ГЕНЕРАЦИЯ КОНТЕНТА</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "• <b>Посты по теме</b> — напиши тему, получи готовый пост в твоём стиле\n"
+        "• <b>Голосовой ввод</b> — отправь голосовое, я пойму\n"
+        "• <b>Исследование</b> — ищу актуальную инфу в интернете и пишу пост\n"
+        "• <b>Стиль конкурентов</b> — анализирую каналы и адаптирую тон\n\n"
+
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "<b>✏️ РЕДАКТИРОВАНИЕ</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "После генерации просто скажи что изменить:\n"
+        "• <i>\"убери хештеги\"</i> — точечная правка кодом\n"
+        "• <i>\"сделай короче\"</i> — творческая правка через AI\n"
+        "• <i>\"добавь хук и убери эмодзи\"</i> — комбо-правки\n"
+        "• <i>\"выдели главное жирным\"</i> — форматирование\n\n"
+
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "<b>🧠 ПАМЯТЬ И ОБУЧЕНИЕ</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "• Запоминаю стиль твоего канала\n"
+        "• Учусь на успешных постах\n"
+        "• <i>\"слишком длинно\"</i> → запомню на будущее\n\n"
+
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "<b>⭐️ КАК ПОЛУЧИТЬ ЛУЧШИЙ РЕЗУЛЬТАТ</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "1. Добавь свой канал (⚙️ → Сменить канал)\n"
+        "2. Добавь 2-3 канала для вдохновения (⚙️ → Конкуренты)\n"
+        "   <b>Важно:</b> каналы должны быть <b>публичными</b>!\n"
+        "3. Я проанализирую их стиль и буду генерить похоже\n\n"
+
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "<b>🎯 КНОПКИ</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "• 🎤 <b>Создать пост</b> — тема текстом или голосом\n"
+        "• 💡 <b>Идеи</b> — предложу темы для постов\n"
+        "• 📋 <b>Черновики</b> — сохранённые посты\n"
+        "• ⚙️ <b>Настройки</b> — канал и конкуренты\n\n"
     )
 
     if not channel:
         # Нет канала — просим подключить
         user_states[message.from_user.id] = {"state": "onboarding_channel"}
         await message.answer(
-            instruction + "<b>Начнём:</b>\nНапиши @username твоего канала",
+            instruction + "<b>Начнём настройку:</b>\nНапиши @username твоего канала (публичного)",
             parse_mode="HTML",
             reply_markup=ReplyKeyboardRemove()
         )
     else:
         # Канал есть — показываем меню
         await message.answer(
-            instruction + "Напиши тему поста или нажми кнопку.",
+            instruction + "Готов к работе! Напиши тему поста или нажми кнопку.",
             parse_mode="HTML",
             reply_markup=main_menu
         )
@@ -1106,6 +1236,15 @@ async def process_text_input(message: Message, text: str):
 
     # Тема поста
     if state == "post_topic":
+        # Проверка лимита
+        if not check_rate_limit(tg_id):
+            await message.answer(
+                f"Достигнут дневной лимит ({DAILY_LIMIT_PER_USER} генераций).\n"
+                "Попробуй завтра!",
+                parse_mode=None
+            )
+            return
+
         await message.answer("Генерирую пост...")
 
         try:
@@ -1115,6 +1254,7 @@ async def process_text_input(message: Message, text: str):
             db.execute("UPDATE tasks SET status = 'cancelled' WHERE user_id = ? AND status IN ('queued', 'running', 'paused')", (user_id,))
             draft = agent.generate_post(user_id, text)
 
+        increment_usage(tg_id)  # Увеличиваем счётчик
         pending_posts[tg_id] = draft
         user_states.pop(tg_id, None)
 
@@ -1123,6 +1263,15 @@ async def process_text_input(message: Message, text: str):
 
     # Тема поста в стиле конкретного канала
     if state == "post_topic_styled":
+        # Проверка лимита
+        if not check_rate_limit(tg_id):
+            await message.answer(
+                f"Достигнут дневной лимит ({DAILY_LIMIT_PER_USER} генераций).\n"
+                "Попробуй завтра!",
+                parse_mode=None
+            )
+            return
+
         target_channel = user_states[tg_id].get("target_channel", "")
         await message.answer(f"Генерирую пост в стиле {target_channel}...", parse_mode=None)
 
@@ -1135,6 +1284,7 @@ async def process_text_input(message: Message, text: str):
             db.execute("UPDATE tasks SET status = 'cancelled' WHERE user_id = ? AND status IN ('queued', 'running', 'paused')", (user_id,))
             draft = agent.generate_post(user_id, topic_with_channel)
 
+        increment_usage(tg_id)
         pending_posts[tg_id] = draft
         user_states.pop(tg_id, None)
 
