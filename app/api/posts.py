@@ -248,7 +248,7 @@ async def update_post(
         params.append(data.status.value)
 
     # Update metadata
-    metadata = json.loads(row.get("metadata") or "{}")
+    metadata = json.loads(row["metadata"] or "{}")
 
     if data.platforms is not None:
         metadata["platforms"] = [p.value for p in data.platforms]
