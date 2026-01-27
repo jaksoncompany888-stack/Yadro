@@ -4,7 +4,7 @@
  * All requests include Telegram init data for authentication.
  */
 
-const API_BASE = '/api'
+const API_BASE = 'http://3.121.215.231/api'
 
 async function request(endpoint, options = {}, initData = '') {
   const url = `${API_BASE}${endpoint}`
