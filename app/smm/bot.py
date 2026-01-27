@@ -512,11 +512,15 @@ async def cb_analyze_competitor(callback: CallbackQuery):
                 [InlineKeyboardButton(text="✍️ Написать пост в этом стиле", callback_data=f"write_style_{channel}")],
                 [InlineKeyboardButton(text="🔙 К конкурентам", callback_data="back_to_competitors")]
             ])
-            await send_post(callback.message, f"📊 АНАЛИЗ {channel}:\n\n{analysis}", reply_markup=keyboard)
+            # Редактируем то же сообщение вместо отправки нового
+            result_text = f"📊 <b>АНАЛИЗ {channel}</b>\n\n{analysis}"
+            if len(result_text) > 4096:
+                result_text = result_text[:4090] + "..."
+            await callback.message.edit_text(result_text, reply_markup=keyboard)
         else:
-            await send_post(callback.message, analysis)
+            await callback.message.edit_text(analysis, parse_mode=None)
     except Exception as e:
-        await callback.message.answer(f"Ошибка: {e}", parse_mode=None)
+        await callback.message.edit_text(f"Ошибка анализа {channel}: {e}", parse_mode=None)
 
 
 @dp.callback_query(F.data.startswith("write_style_"))
