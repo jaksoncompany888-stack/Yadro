@@ -236,10 +236,10 @@ function DayCard({
 
 function PostCard({ post, onClick, onDragStart, onDragEnd, isDragging }) {
   const statusColors = {
-    draft: 'bg-gray-200 text-gray-700',
-    scheduled: 'bg-blue-100 text-blue-700',
-    published: 'bg-green-100 text-green-700',
-    error: 'bg-red-100 text-red-700',
+    draft: 'bg-tg-secondary-bg text-tg-hint',
+    scheduled: 'bg-tg-button/20 text-tg-button',
+    published: 'bg-green-500/20 text-green-600 dark:text-green-400',
+    error: 'bg-red-500/20 text-red-600 dark:text-red-400',
   }
 
   const statusLabels = {
