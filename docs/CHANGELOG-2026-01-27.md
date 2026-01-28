@@ -103,8 +103,36 @@ ssh -i ~/Desktop/yadro-key.pem ubuntu@3.121.215.231 "sudo systemctl restart yadr
 
 ## Изменённые файлы
 
-- `app/smm/bot.py` - онбординг, меню настроек
-- `app/smm/agent.py` - паттерн замены эмодзи
-- `run_all.py` - добавлен load_dotenv()
+- `app/smm/bot.py` - онбординг, меню настроек, WhitelistMiddleware, callback fix
+- `app/smm/agent.py` - паттерн замены эмодзи, метрики анализа каналов
+- `app/tools/channel_parser.py` - парсинг реакций, подписчиков
+- `app/tools/smm_tools.py` - метрики: reactions, forwards, engagement_rate
+- `run_all.py` - load_dotenv(), graceful shutdown, signal handlers
 - `webapp/src/api/client.js` - API_BASE = '/api'
 - `webapp/vercel.json` - rewrite на AWS API
+- `webapp/src/components/Calendar.jsx` - dark theme fix (bg-tg-bg)
+
+## Вечерняя сессия (20:00-22:10)
+
+### Whitelist и Rate Limits
+- Добавлен `ALLOWED_USER_IDS` = {140942228, 275622001, 727559198, 774618452}
+- Добавлен `DAILY_LIMIT` = 50 постов/день
+- `WhitelistMiddleware` проверяет ВСЕ входящие сообщения и callback'и
+
+### Метрики анализа каналов
+- Подписчики (get_channel_info)
+- Средние/макс просмотры
+- Реакции (парсинг `.tgme_reaction`)
+- Репосты/форварды
+- Engagement rate = (reactions + forwards) / views * 100
+
+### Fixes
+- Парсинг подписчиков: убрали суффикс "SUBSCRIBERS" из числа
+- Парсинг реакций: исправлено затирание переменной `text`
+- Callback timeout: `callback.answer()` вызывается сразу
+- Дублирование сообщений: `edit_text` вместо `send_post`
+
+### Graceful Shutdown
+- `TimeoutStopSec=10` в systemd
+- `KillMode=mixed`
+- Signal handler в `run_all.py`
