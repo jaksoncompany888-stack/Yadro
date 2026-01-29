@@ -99,7 +99,7 @@ async def add_user_channel(
                 return ValidateResponse(
                     valid=False,
                     can_post=False,
-                    error="Бот не добавлен в канал как администратор. Добавьте бота @YadroSMMBot в канал с правами на публикацию."
+                    error="Бот не добавлен в канал как администратор. Добавьте бота @Yadro888_bot в канал с правами на публикацию."
                 )
 
             # Получаем информацию о канале
