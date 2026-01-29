@@ -322,8 +322,12 @@ class TelegramProvider(SocialProvider):
             if chat.type not in ("channel", "supergroup"):
                 return False
 
+            # Get bot's own ID
+            me = await self._bot.get_me()
+            bot_id = me.id
+
             # Check bot's permissions
-            member = await self._bot.get_chat_member(chat_id, self._bot.id)
+            member = await self._bot.get_chat_member(chat_id, bot_id)
             if member.status not in ("administrator", "creator"):
                 return False
 
