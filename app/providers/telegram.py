@@ -311,32 +311,46 @@ class TelegramProvider(SocialProvider):
 
     async def validate_channel(self, channel_id: str) -> bool:
         """Check if channel exists and bot has posting permissions."""
+        import logging
+        logger = logging.getLogger(__name__)
+
         await self._ensure_bot()
 
         chat_id = self._normalize_channel_id(channel_id)
+        logger.info(f"Validating channel: {chat_id}")
 
         try:
             chat = await self._bot.get_chat(chat_id)
+            logger.info(f"Chat type: {chat.type}, title: {chat.title}")
 
             # Check if it's a channel or supergroup
             if chat.type not in ("channel", "supergroup"):
+                logger.warning(f"Not a channel/supergroup: {chat.type}")
                 return False
 
             # Get bot's own ID
             me = await self._bot.get_me()
             bot_id = me.id
+            logger.info(f"Bot ID: {bot_id}, Bot username: {me.username}")
 
             # Check bot's permissions
             member = await self._bot.get_chat_member(chat_id, bot_id)
+            logger.info(f"Bot status in channel: {member.status}")
+
             if member.status not in ("administrator", "creator"):
+                logger.warning(f"Bot is not admin: {member.status}")
                 return False
 
             # Check posting rights
             if hasattr(member, "can_post_messages"):
-                return member.can_post_messages or member.status == "creator"
+                can_post = member.can_post_messages or member.status == "creator"
+                logger.info(f"can_post_messages: {member.can_post_messages}, result: {can_post}")
+                return can_post
 
+            logger.info("No can_post_messages attr, returning True")
             return True
-        except Exception:
+        except Exception as e:
+            logger.error(f"Validation error: {e}")
             return False
 
     async def get_channel_info(self, channel_id: str) -> Optional[TelegramChannel]:
