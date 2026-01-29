@@ -149,6 +149,29 @@ ALLOWED_USER_IDS = {140942228, 275622001, 727559198, 774618452}
 - **Откат версий** — можно откатить несколько раз
 - **Нормализация коротких команд** — "короче" → "сделай текст короче"
 
+## Безопасность
+
+### Rate Limiting (nginx)
+- **AI генерация** (`/api/posts/generate`): 2 req/sec, burst 5
+- **Остальные API**: 10 req/sec, burst 20
+- При превышении — HTTP 429 Too Many Requests
+
+### Security Headers
+```
+X-Frame-Options: SAMEORIGIN
+X-Content-Type-Options: nosniff
+X-XSS-Protection: 1; mode=block
+Referrer-Policy: strict-origin-when-cross-origin
+```
+
+### Защита API ключей
+- `.env` в `.gitignore` — ключи не попадают в git
+- Ключи хранятся только на сервере
+
+### Рекомендации
+- Swagger UI (`/docs`) доступен — можно ограничить по IP
+- Порты 8000, 8001, 3000 открыты внутри — nginx проксирует наружу
+
 ## Известные проблемы
 
 - SSH может зависать если sshd перегружен (решение: reboot через AWS Console)
