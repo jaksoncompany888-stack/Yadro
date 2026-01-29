@@ -119,7 +119,7 @@ async def add_user_channel(
                 channel_id=channel_id,
                 name=channel_info.title,
                 username=channel_info.username,
-                subscribers=channel_info.members_count or 0,
+                subscribers=channel_info.member_count or 0,
                 is_valid=True,
                 can_post=True,
             )
@@ -219,7 +219,7 @@ async def validate_channel(
                         channel_id=channel_id,
                         name=channel_info.title,
                         username=channel_info.username,
-                        subscribers=channel_info.members_count or 0,
+                        subscribers=channel_info.member_count or 0,
                         is_valid=True,
                         can_post=True,
                     )
