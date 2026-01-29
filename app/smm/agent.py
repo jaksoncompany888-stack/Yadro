@@ -305,6 +305,68 @@ class SMMAgent:
             return style[0].replace('Стиль:', '').strip()
         return ""
 
+    def get_recommended_temperature(self, user_id: int) -> float:
+        """
+        Получить рекомендованную температуру из анализа каналов.
+
+        Приоритет:
+        1. Собственный канал пользователя
+        2. Среднее по конкурентам
+        3. Default 0.5
+        """
+        import json
+
+        # 1. Ищем собственный канал
+        own_channel = self.get_channel_id(user_id)
+        if own_channel:
+            own_channel_clean = own_channel.replace('@', '')
+            row = self.db.fetch_one(
+                """SELECT metadata FROM memory_items
+                   WHERE user_id = ?
+                   AND content LIKE ?
+                   AND metadata IS NOT NULL
+                   ORDER BY created_at DESC LIMIT 1""",
+                (user_id, f"Стиль канала %{own_channel_clean}%")
+            )
+            if row and row[0]:
+                try:
+                    meta = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                    temp = meta.get("recommended_temperature")
+                    if temp:
+                        print(f"[Temperature] Из собственного канала {own_channel}: {temp}")
+                        return float(temp)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        # 2. Среднее по конкурентам
+        rows = self.db.fetch_all(
+            """SELECT metadata FROM memory_items
+               WHERE user_id = ?
+               AND content LIKE 'Стиль канала%'
+               AND metadata IS NOT NULL
+               ORDER BY created_at DESC LIMIT 5""",
+            (user_id,)
+        )
+        temps = []
+        for row in rows:
+            if row[0]:
+                try:
+                    meta = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                    temp = meta.get("recommended_temperature")
+                    if temp:
+                        temps.append(float(temp))
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        if temps:
+            avg_temp = sum(temps) / len(temps)
+            print(f"[Temperature] Среднее по {len(temps)} каналам: {avg_temp:.2f}")
+            return round(avg_temp, 2)
+
+        # 3. Default
+        print("[Temperature] Нет данных, используем default 0.5")
+        return 0.5
+
     def _find_relevant_channel_styles(self, user_id: int, topic: str, limit: int = 3) -> List[str]:
         """
         Найти релевантные стили каналов по теме поста (архитектурно, через FTS5).
@@ -344,6 +406,67 @@ class SMMAgent:
             print(f"[Context] FTS5 поиск не сработал: {e}")
 
         return []
+
+    def _extract_competitor_insights(self, style_text: str, channel: str = "") -> str:
+        """
+        Извлечь ИНСАЙТЫ из анализа стиля конкурента, БЕЗ навязывания стиля.
+
+        ОСТАВЛЯЕМ (инсайты — ЧТО работает):
+        - Темы которые заходят
+        - HOOKS — примеры цепляющих фраз
+        - Триггеры вовлечения
+        - Фирменные приёмы (идеи, не форматирование)
+
+        УБИРАЕМ (стиль — КАК писать):
+        - ЛИЦО ПОВЕСТВОВАНИЯ — это должен быть стиль пользователя
+        - СТРУКТУРА абзацев — не копируем
+        - Эмодзи-паттерны — не навязываем
+        - ДЛИНА постов — у пользователя своя
+        - TONE OF VOICE — это стиль, не инсайт
+        """
+        if not style_text:
+            return ""
+
+        insights = []
+
+        # Разбиваем на секции
+        lines = style_text.split('\n')
+
+        current_section = ""
+        keep_sections = ['hook', 'темы', 'триггер', 'вовлечен', 'приём', 'прием', 'фишк', 'работает', 'заход']
+        skip_sections = ['лицо', 'структур', 'длина', 'эмодзи', 'emoji', 'tone', 'тон', 'формат', 'концовк']
+
+        for line in lines:
+            line_lower = line.lower().strip()
+
+            # Определяем секцию
+            if any(s in line_lower for s in skip_sections):
+                current_section = "skip"
+            elif any(s in line_lower for s in keep_sections):
+                current_section = "keep"
+                insights.append(line.strip())
+            elif current_section == "keep" and line.strip():
+                # Продолжаем добавлять строки из нужной секции
+                insights.append(line.strip())
+            elif current_section != "skip" and line.strip():
+                # Неизвестная секция — проверяем на полезные ключевые слова
+                if any(word in line_lower for word in ['пример', 'фраз', 'работает', 'цепля', 'вовлека']):
+                    insights.append(line.strip())
+
+        if not insights:
+            # Fallback — берём только примеры фраз если есть
+            for line in lines:
+                if '•' in line or '—' in line or line.strip().startswith('-'):
+                    # Это скорее всего пример
+                    if len(line.strip()) > 20:
+                        insights.append(line.strip())
+
+        result = "\n".join(insights[:10])  # Максимум 10 строк
+
+        if result:
+            return f"ИНСАЙТЫ (темы и идеи, НЕ стиль):\n{result}\n\n⚠️ Пиши в СВОЁМ стиле, не копируй {channel}!"
+
+        return ""
 
     def _extract_channel_from_topic(self, topic: str, user_id: int = None) -> Optional[str]:
         """
@@ -551,9 +674,28 @@ class SMMAgent:
                 examples.append(f"• {text[:400]}")
             parts.append(f"ПРИМЕРЫ ПОСТОВ КОТОРЫЕ ЗАШЛИ:\n" + "\n".join(examples))
 
-        # 3. СТИЛИ КАНАЛОВ — конкретный, релевантный по теме, или все
+        # 3. СТИЛИ КАНАЛОВ — приоритет: собственный канал > конкуренты
+
+        # 3.1 СОБСТВЕННЫЙ КАНАЛ — главный приоритет
+        own_channel = self.get_channel_id(user_id)
+        own_channel_style = None
+        if own_channel:
+            own_channel_clean = own_channel.replace('@', '')
+            own_style_row = self.db.fetch_one(
+                """SELECT content FROM memory_items
+                   WHERE user_id = ?
+                   AND (content LIKE ? OR content LIKE ?)
+                   ORDER BY created_at DESC LIMIT 1""",
+                (user_id, f"Стиль канала %{own_channel_clean}%", f"Авто-анализ:%")
+            )
+            if own_style_row:
+                own_channel_style = own_style_row[0][:600]
+                parts.append(f"ТВОЙ СТИЛЬ (ГЛАВНЫЙ ПРИОРИТЕТ — пиши так!):\n{own_channel_style}")
+                print(f"[Context] Собственный канал: {own_channel}")
+
+        # 3.2 Конкретный канал для вдохновения (если указан)
+        # ВАЖНО: извлекаем только ИНСАЙТЫ, не весь стиль!
         if target_channel:
-            # Только стиль указанного канала
             channel_clean = target_channel.replace('@', '')
             channel_style = self.db.fetch_one(
                 """SELECT content FROM memory_items
@@ -563,39 +705,26 @@ class SMMAgent:
                 (user_id, f"Стиль канала %{channel_clean}%", f"Стиль канала @{channel_clean}%")
             )
             if channel_style:
-                parts.append(f"СТИЛЬ КАНАЛА {target_channel} (ПИШИ ИМЕННО В ЭТОМ СТИЛЕ):\n{channel_style[0][:800]}")
-        elif topic:
-            # Поиск релевантных стилей по теме через FTS5 (до 3 каналов)
-            relevant_styles = self._find_relevant_channel_styles(user_id, topic, limit=3)
+                # Извлекаем только инсайты, не весь стиль
+                insights = self._extract_competitor_insights(channel_style[0], target_channel)
+                if insights:
+                    parts.append(insights)
+                    print(f"[Context] Инсайты из {target_channel} (без копирования стиля)")
+
+        # 3.3 Релевантные конкуренты по теме — только ИНСАЙТЫ
+        # Ищем конкурентов по теме через FTS5, но берём только идеи/темы
+        if not target_channel and topic:
+            relevant_styles = self._find_relevant_channel_styles(user_id, topic, limit=2)
             if relevant_styles:
-                styles_text = "\n---\n".join([s[:400] for s in relevant_styles])
-                parts.append(f"РЕЛЕВАНТНЫЕ СТИЛИ (по теме):\n{styles_text}")
-                print(f"[Context] FTS5: найдено {len(relevant_styles)} релевантных стилей")
-            else:
-                # Fallback — последние добавленные стили (оба формата)
-                channel_styles = self.db.fetch_all(
-                    """SELECT content FROM memory_items
-                       WHERE user_id = ?
-                       AND content LIKE 'Стиль канала%'
-                       ORDER BY created_at DESC LIMIT 2""",
-                    (user_id,)
-                )
-                if channel_styles:
-                    styles_text = "\n---\n".join([s[0][:400] for s in channel_styles])
-                    parts.append(f"СТИЛИ КАНАЛОВ:\n{styles_text}")
-                    print(f"[Context] Fallback: найдено {len(channel_styles)} стилей")
-        else:
-            # Все стили каналов (fallback)
-            channel_styles = self.db.fetch_all(
-                """SELECT content FROM memory_items
-                   WHERE user_id = ?
-                   AND content LIKE 'Стиль канала%'
-                   ORDER BY created_at DESC LIMIT 3""",
-                (user_id,)
-            )
-            if channel_styles:
-                insights = [row[0][:350] for row in channel_styles]
-                parts.append(f"СТИЛИ КАНАЛОВ:\n" + "\n---\n".join(insights))
+                all_insights = []
+                for style in relevant_styles:
+                    # Извлекаем инсайты без навязывания стиля
+                    insight = self._extract_competitor_insights(style, "конкурентов")
+                    if insight:
+                        all_insights.append(insight)
+                if all_insights:
+                    parts.append("\n---\n".join(all_insights[:2]))
+                    print(f"[Context] FTS5: найдено {len(all_insights)} источников инсайтов")
 
         # 4. ТИПИЧНЫЕ ПРАВКИ КЛИЕНТА
         edits = self.db.fetch_all(
@@ -696,6 +825,9 @@ class SMMAgent:
         # Определяем нужен ли web search
         skip_web_search = not self._needs_research(topic)
 
+        # Получаем рекомендованную температуру из анализа каналов
+        recommended_temp = self.get_recommended_temperature(user_id)
+
         # Создаём задачу
         task = self.tasks.enqueue(
             user_id=user_id,
@@ -706,6 +838,7 @@ class SMMAgent:
                 "topic": topic,
                 "smm_context": smm_context,
                 "skip_web_search": skip_web_search,
+                "recommended_temperature": recommended_temp,
             }
         )
 
@@ -789,20 +922,13 @@ class SMMAgent:
         return ""
 
     def _needs_research(self, topic: str) -> bool:
-        """Определить, нужен ли поиск актуальной информации."""
-        topic_lower = topic.lower()
+        """Определить, нужен ли поиск актуальной информации.
 
-        years = re.findall(r'202[4-9]|203\d', topic)
-        if years:
-            return True
-
-        keywords = [
-            'тренд', 'прогноз', 'новост', 'актуальн', 'сейчас', 'сегодня',
-            'последн', 'свежи', 'недавн', 'этот год', 'в этом году',
-            'курс', 'цена', 'стоимость', 'событи', 'новинк'
-        ]
-
-        return any(kw in topic_lower for kw in keywords)
+        Всегда возвращаем True — интернет-поиск улучшает качество постов,
+        добавляет актуальные факты и проверяет информацию.
+        """
+        # Всегда ищем в интернете для максимального качества
+        return True
 
     # ==================== РЕДАКТИРОВАНИЕ ====================
 
@@ -942,6 +1068,26 @@ class SMMAgent:
 
         return False
 
+    def _resolve_emoji_by_name(self, name: str) -> str:
+        """Использует LLM чтобы определить эмодзи по названию."""
+        prompt = f"""Какой эмодзи соответствует слову "{name}"?
+Ответь ТОЛЬКО одним эмодзи, без текста. Если не знаешь — ответь пустой строкой."""
+
+        try:
+            response = self.llm.complete(
+                messages=[Message.user(prompt)],
+                user_id=0,
+                temperature=0.0
+            )
+            emoji = response.content.strip()
+            # Проверяем что это действительно эмодзи (1-2 символа Unicode)
+            if len(emoji) <= 4 and any(ord(c) > 127 for c in emoji):
+                print(f"[Edit] LLM resolved '{name}' → {emoji}")
+                return emoji
+        except Exception as e:
+            print(f"[Edit] LLM emoji resolve failed: {e}")
+        return ""
+
     def _precise_edit(self, text: str, request: str) -> str:
         """Применить точечную правку кодом (без LLM)."""
         result = text
@@ -952,47 +1098,38 @@ class SMMAgent:
         request_lower = re.sub(r'смайл\w*', 'эмодзи', request_lower)
 
         # === УБЕРИ ЭМОДЗИ ===
-        # Словарь эмодзи по названиям
-        emoji_names = {
-            'радуг': '🌈', 'солнц': '☀️', 'солныш': '🌞', 'сердц': '❤️', 'сердеч': '💖',
-            'огон': '🔥', 'огонь': '🔥', 'огонек': '🔥', 'огонёк': '🔥',
-            'звезд': '⭐', 'звёзд': '🌟', 'цвет': '🌸', 'роз': '🌹',
-            'ракет': '🚀', 'молни': '⚡', 'галоч': '✅', 'крест': '❌',
-            'гаечн': '🔧', 'ключ': '🔧', 'инструмент': '🔧',
-            'дом': '🏠', 'домик': '🏠',
-        }
+        if ('убери' in request_lower or 'удали' in request_lower or 'без' in request_lower) and \
+           ('эмодзи' in request_lower or 'эмоджи' in request_lower):
 
-        # Проверяем нужно ли убрать эмодзи
-        should_remove_emoji = (
-            ('эмодзи' in request_lower or 'эмоджи' in request_lower) or
-            any(name in request_lower for name in emoji_names.keys())
-        )
+            # Сначала проверяем — есть ли сам эмодзи в запросе?
+            emoji_pattern = re.compile("[\U0001F300-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]+")
+            emojis_in_request = emoji_pattern.findall(request)
 
-        if should_remove_emoji and ('убери' in request_lower or 'удали' in request_lower or 'без' in request_lower):
-            # Ищем конкретный эмодзи по названию
             found_specific = False
-            for name, emoji in emoji_names.items():
-                if name in request_lower and emoji in result:
-                    result = result.replace(emoji, '', 1)
-                    print(f"[Edit] ✓ precise: убран эмодзи {emoji}")
+            for em in emojis_in_request:
+                if em in result:
+                    result = result.replace(em, '', 1)
+                    print(f"[Edit] ✓ precise: убран эмодзи {em}")
                     found_specific = True
-                    break
 
-            # Или сам эмодзи в запросе
+            # Ищем название эмодзи в запросе (используем LLM)
             if not found_specific:
-                emoji_pattern = re.compile("[\U0001F300-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]+")
-                emojis_in_request = emoji_pattern.findall(request)
-                for em in emojis_in_request:
-                    if em in result:
-                        result = result.replace(em, '', 1)
-                        print(f"[Edit] ✓ precise: убран эмодзи {em}")
+                # Извлекаем слово-название после "эмодзи"
+                name_match = re.search(r'эмодзи\s+(\w+)', request_lower)
+                if name_match:
+                    emoji_name = name_match.group(1)
+                    # Спрашиваем LLM какой эмодзи соответствует названию
+                    resolved_emoji = self._resolve_emoji_by_name(emoji_name)
+                    if resolved_emoji and resolved_emoji in result:
+                        result = result.replace(resolved_emoji, '', 1)
+                        print(f"[Edit] ✓ precise: убран эмодзи {resolved_emoji} (LLM resolved '{emoji_name}')")
                         found_specific = True
 
-            # Или убрать ВСЕ эмодзи (только если явно сказали "эмодзи" без конкретики)
-            if not found_specific and ('эмодзи' in request_lower or 'эмоджи' in request_lower):
-                emoji_pattern = re.compile("[\U0001F300-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]+")
-                result = emoji_pattern.sub('', result)
-                print(f"[Edit] ✓ precise: убраны все эмодзи")
+            # Убрать ВСЕ эмодзи только если явно сказали "все эмодзи" или "убери эмодзи" без конкретики
+            if not found_specific:
+                if 'все' in request_lower:
+                    result = emoji_pattern.sub('', result)
+                    print(f"[Edit] ✓ precise: убраны все эмодзи")
 
         # === УБЕРИ АБЗАЦ ===
         paragraphs = [p for p in result.split('\n\n') if p.strip()]
@@ -1093,31 +1230,21 @@ class SMMAgent:
         if replace_match:
             old_text, new_text = replace_match.group(1).strip(), replace_match.group(2).strip()
 
-            # Если это названия эмодзи — конвертируем в эмодзи
-            emoji_map = {
-                'сердечк': '💖', 'сердц': '❤️', 'огонек': '🔥', 'огонёк': '🔥', 'огон': '🔥',
-                'звезд': '⭐', 'звёзд': '🌟', 'солнц': '☀️', 'радуг': '🌈',
-                'цветочек': '🌸', 'цвет': '🌸', 'роз': '🌹', 'ракет': '🚀',
-            }
+            # Проверяем, похоже ли old_text на название эмодзи
+            # Если да — используем LLM для резолва
+            emoji_pattern = re.compile("[\U0001F300-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]+")
 
-            # Ищем эмодзи по названию для old
-            for name, emoji in emoji_map.items():
-                if name in old_text.lower():
-                    # Ищем любой эмодзи-сердце/огонь и т.п. в тексте
-                    if name.startswith('сердц') or name.startswith('сердеч'):
-                        for em in ['💖', '❤️', '💕', '💗', '💓', '💘', '🩷', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎']:
-                            if em in result:
-                                old_text = em
-                                break
-                    elif emoji in result:
-                        old_text = emoji
-                    break
+            # Резолвим old_text если это слово (не эмодзи)
+            if not emoji_pattern.search(old_text):
+                resolved_old = self._resolve_emoji_by_name(old_text)
+                if resolved_old and resolved_old in result:
+                    old_text = resolved_old
 
-            # Ищем эмодзи по названию для new
-            for name, emoji in emoji_map.items():
-                if name in new_text.lower():
-                    new_text = emoji
-                    break
+            # Резолвим new_text если это слово
+            if not emoji_pattern.search(new_text):
+                resolved_new = self._resolve_emoji_by_name(new_text)
+                if resolved_new:
+                    new_text = resolved_new
 
             if old_text in result:
                 result = result.replace(old_text, new_text, 1)
@@ -1127,6 +1254,23 @@ class SMMAgent:
 
     def _creative_edit(self, user_id: int, original: str, request: str, topic: str) -> str:
         """LLM редактирует текст напрямую (возвращает готовый результат)."""
+
+        # Нормализуем короткие команды в полноценные инструкции
+        request_lower = request.lower().strip()
+        short_commands = {
+            'короче': 'сделай текст короче, убери лишние слова и повторы',
+            'длиннее': 'сделай текст длиннее, добавь подробностей',
+            'проще': 'сделай текст проще, используй более простые слова',
+            'формальнее': 'сделай текст более формальным и официальным',
+            'неформальнее': 'сделай текст более живым и разговорным',
+            'жёстче': 'сделай текст более резким и прямолинейным',
+            'мягче': 'сделай текст более мягким и дружелюбным',
+        }
+        for short, full in short_commands.items():
+            if request_lower == short or request_lower == f'сделай {short}':
+                request = full
+                print(f"[Edit] Нормализация: '{request_lower}' → '{full}'")
+                break
 
         # Контекст стиля из памяти
         style_hint = ""
@@ -1142,32 +1286,59 @@ class SMMAgent:
         paragraphs = [p.strip() for p in original.split('\n\n') if p.strip()]
         numbered = "\n\n".join([f"[Абзац {i+1}] {p}" for i, p in enumerate(paragraphs)])
 
-        prompt = f"""ТЕКСТ ПОСТА ({len(paragraphs)} абзацев):
+        # Определяем тип запроса для правильных инструкций
+        request_lower = request.lower()
+        is_shorten = any(w in request_lower for w in ['короче', 'сократи', 'убери лишнее', 'компактнее'])
+        is_expand = any(w in request_lower for w in ['длиннее', 'подробнее', 'добавь деталей', 'разверни'])
+
+        # Специальные инструкции для сокращения
+        if is_shorten:
+            # Агрессивный промпт для сокращения с объединением абзацев
+            target_len = int(len(original) * 0.6)
+            num_paragraphs = len(paragraphs)
+            target_paragraphs = max(2, num_paragraphs // 2)  # Сократить число абзацев вдвое
+
+            prompt = f"""ЗАДАЧА: СОКРАТИТЬ текст до ~{target_len} символов (сейчас {len(original)})
+
+ТЕКСТ:
+{original}
+
+ПРАВИЛА СОКРАЩЕНИЯ:
+1. ОБЪЕДИНЯЙ абзацы по смыслу — сейчас {num_paragraphs} абзацев, нужно {target_paragraphs}-{target_paragraphs+1}
+2. Убери повторы и "воду", но СОХРАНИ ключевые мысли
+3. Много мелких абзацев — плохо, лучше 2-4 плотных абзаца
+4. Первый абзац = хук, последний = вопрос/призыв (если был)
+
+Дополнительно: {request}{style_hint}
+
+Верни ТОЛЬКО сокращённый текст, без комментариев."""
+            print(f"[Edit] Creative mode (SHORTEN): {len(original)} → target ~{target_len}")
+            response = self.llm.complete_simple(prompt, task_type="smm")
+            result = response.strip()
+        else:
+            if is_expand:
+                structure_rule = """- Добавляй примеры, детали, пояснения
+- Можно разбивать абзацы для читаемости"""
+            else:
+                structure_rule = """- Структуру абзацев — не объединяй и не разбивай без необходимости"""
+
+            prompt = f"""ТЕКСТ ПОСТА ({len(paragraphs)} абзацев):
 {numbered}
 
 ЗАПРОС: {request}{style_hint}
 
 ПРАВИЛА:
-- Работай ТОЛЬКО с текстом выше — он уже может быть изменён
-- НЕ добавляй абзацы которых нет в тексте
-- НЕ восстанавливай удалённый контент
-- "добавь хук" = цепляющее предложение В НАЧАЛО как отдельный абзац
-- Сохрани ключевые факты (даты, цифры, условия)
-- Стиль и тон — как в оригинале
+- Работай ТОЛЬКО с текстом выше
+{structure_rule}
+- Сохрани ключевые факты (даты, цифры, имена)
 - Используй ТОЛЬКО теги <b> для жирного
 - НЕ используй span, div, style или другие HTML теги
 
-КРИТИЧНО — НЕ МЕНЯЙ без запроса:
-- Нумерацию (1. 2. 3.) — если есть, оставь как есть
-- Буллеты (• - *) — сохрани формат списков
-- Структуру абзацев — не объединяй и не разбивай
-- Эмодзи — не добавляй и не убирай если не просили
-
 Верни ТОЛЬКО готовый текст поста БЕЗ нумерации абзацев, без комментариев."""
 
-        print(f"[Edit] Creative mode: {request}")
-        response = self.llm.complete_simple(prompt)
-        result = response.strip()
+            print(f"[Edit] Creative mode: {request}")
+            response = self.llm.complete_simple(prompt, task_type="smm")
+            result = response.strip()
 
         # Убираем markdown обёртки если есть
         if result.startswith("```"):
@@ -1178,29 +1349,33 @@ class SMMAgent:
         request_lower = request.lower()
 
         # Определяем ожидаемые границы длины на основе запроса
-        expand_words = ['добавь', 'дополни', 'расширь', 'напиши ещё', 'напиши еще',
-                        'больше', 'длиннее', 'подробнее', 'разверни', 'увеличь']
-        if any(word in request_lower for word in expand_words):
-            # Запрос на добавление контента - разрешаем до 5x
+        # ВАЖНО: "короче" имеет приоритет над "добавь эмодзи"
+        shorten_words = ['сократи', 'короче', 'убери лишнее', 'компактнее']
+        expand_words = ['длиннее', 'подробнее', 'разверни', 'увеличь', 'расширь текст']
+
+        if any(word in request_lower for word in shorten_words):
+            # Запрос на сокращение - результат должен быть короче
+            max_multiplier = 1.1  # Небольшой запас
+            min_multiplier = 0.1  # Можно сократить до 10%
+        elif any(word in request_lower for word in expand_words):
+            # Запрос на расширение текста - разрешаем до 5x
             max_multiplier = 5
-            min_multiplier = 0.8  # Не должен сильно сокращать при добавлении
-        elif any(word in request_lower for word in ['сократи', 'короче', 'убери', 'удали']):
-            # Запрос на сокращение - результат должен быть короче или равен
-            max_multiplier = 1.2  # Небольшой запас на форматирование
-            min_multiplier = 0.1
+            min_multiplier = 0.8
         else:
-            # Обычное редактирование
+            # Обычное редактирование (добавь эмодзи, измени тон и т.д.)
             max_multiplier = 3
             min_multiplier = 0.3
 
         min_len = max(20, int(len(original) * min_multiplier))
         max_len = int(len(original) * max_multiplier)
 
+        print(f"[Edit] Длина: оригинал={len(original)}, результат={len(result)}, границы={min_len}-{max_len}")
+
         if len(result) < min_len or len(result) > max_len:
-            print(f"[Edit] Creative вернул странный результат (len={len(result)}, expected {min_len}-{max_len}), используем оригинал")
+            print(f"[Edit] ⚠️ Creative вернул странный результат, используем оригинал")
             return original
 
-        print(f"[Edit] ✓ creative edit done")
+        print(f"[Edit] ✓ creative edit done, сокращение: {100 - int(len(result)/len(original)*100)}%")
         return result
 
     def _save_edit_feedback(self, user_id: int, edit_request: str, original: str, edited: str):
@@ -1214,44 +1389,28 @@ class SMMAgent:
         )
 
     def edit_post_with_history(self, user_id: int, current: str, edit_request: str, versions: list) -> str:
-        """Редактировать пост с учётом истории версий."""
-        history_context = ""
-        if len(versions) > 1:
-            history_context = f"\n\nИСТОРИЯ ВЕРСИЙ:\n- Оригинал: {versions[0][:200]}..."
-            if len(versions) > 2:
-                history_context += f"\n- Предыдущая версия: {versions[-2][:200]}..."
+        """Редактировать пост с учётом истории версий.
 
-        prompt = f"""Текущий текст:
-{current}
-{history_context}
+        Использует гибридный edit_post() для обычных правок.
+        Специальные команды (откат, верни оригинал) обрабатываются отдельно.
+        """
+        request_lower = edit_request.lower().strip()
 
-Запрос клиента: {edit_request}
+        # Команды отката — обрабатываем без LLM
+        if any(cmd in request_lower for cmd in ['верни оригинал', 'первый вариант', 'изначальн']):
+            if versions:
+                print(f"[Edit] Откат к оригиналу")
+                return versions[0]
+            return current
 
-ВАЖНО:
-- Если просят "верни оригинал/первый вариант" — верни ОРИГИНАЛ из истории
-- Если просят "откати/назад" — верни ПРЕДЫДУЩУЮ версию
-- Иначе — внеси правку в текущий текст
-- Возвращай ТОЛЬКО текст поста, без комментариев
+        if any(cmd in request_lower for cmd in ['откати', 'назад', 'верни предыдущ', 'отмени']):
+            if len(versions) >= 2:
+                print(f"[Edit] Откат к предыдущей версии")
+                return versions[-2]
+            return current
 
-НЕ МЕНЯЙ без запроса:
-- Нумерацию (1. 2. 3.) — если есть, оставь
-- Буллеты (• - *) — сохрани списки
-- Структуру абзацев
-- Эмодзи"""
-
-        response = self.llm.complete(
-            messages=[
-                Message.system("Ты редактор. Понимаешь контекст и историю правок."),
-                Message.user(prompt)
-            ],
-            user_id=user_id
-        )
-
-        # Конвертируем markdown → HTML
-        edited = _markdown_to_html(response.content)
-        self.save_feedback(user_id, f"Правка: {edit_request}", current)
-
-        return edited
+        # Для всех остальных правок — гибридный edit_post()
+        return self.edit_post(user_id, current, edit_request, topic="")
 
     def approve_post(self, task_id: int, user_id: int, post_text: str):
         """Одобрить пост."""
@@ -1326,7 +1485,9 @@ class SMMAgent:
 
             posts_list = []
             for p in organic_posts:
-                posts_list.append(f"👁 {p.views}: {p.text[:200]}...")
+                # Добавляем дату чтобы LLM понимал актуальность
+                date_str = p.date[:10] if p.date else ""  # YYYY-MM-DD
+                posts_list.append(f"[{date_str}] 👁 {p.views}: {p.text[:200]}...")
 
             posts_text = "\n\n".join(posts_list)
 
@@ -1336,19 +1497,24 @@ class SMMAgent:
 {posts_text}
 
 Выдели:
-1. Какие темы заходят лучше всего
-2. Стиль написания (длина, тон, эмодзи)
-3. Что делает эти посты популярными
-4. 2-3 идеи для похожих постов
+1. ЛИЦО ПОВЕСТВОВАНИЯ — САМОЕ ВАЖНОЕ!
+   - 1-е лицо ("я", "мы", "мне") или
+   - 3-е лицо/безличный ("компания", "было решено")
+2. Какие темы заходят лучше всего
+3. Стиль написания (длина, тон, эмодзи)
+4. Что делает эти посты популярными
+5. 2-3 идеи для похожих постов
 
-Кратко, по пунктам."""
+Начни с ЛИЦА — это критически важно для копирования стиля!
+Кратко, по пунктам. Используй HTML-теги для форматирования: <b>жирный</b>"""
 
             response = self.llm.complete(
                 messages=[
-                    Message.system("Ты аналитик контента."),
+                    Message.system("Ты аналитик контента. Отвечай на русском. Сейчас 2026 год. Для выделения используй HTML: <b>жирный</b>"),
                     Message.user(prompt)
                 ],
-                user_id=user_id
+                user_id=user_id,
+                max_tokens=2000
             )
 
             # Конвертируем markdown → HTML

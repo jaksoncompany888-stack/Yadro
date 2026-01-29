@@ -155,10 +155,11 @@ class LLMService:
         config: Optional[LLMServiceConfig] = None,
         mock_mode: bool = True,  # Default to mock for MVP
         openai_api_key: Optional[str] = None,
+        anthropic_api_key: Optional[str] = None,
     ):
         """
         Initialize LLM Service.
-        
+
         Args:
             db: Database for logging
             router: Model router
@@ -167,6 +168,7 @@ class LLMService:
             config: Security configuration
             mock_mode: Use mock responses
             openai_api_key: OpenAI API key
+            anthropic_api_key: Anthropic API key
         """
         self._db = db
         self._router = router or ModelRouter()
@@ -175,6 +177,7 @@ class LLMService:
         self._config = config or LLMServiceConfig()
         self._mock_mode = mock_mode
         self._openai_api_key = openai_api_key
+        self._anthropic_api_key = anthropic_api_key
         self._rate_limiter = LLMRateLimiter()
     
     @property
@@ -518,7 +521,9 @@ class LLMService:
         timeout: int,
     ) -> LLMResponse:
         """Execute single request."""
+        print(f"[LLMService] _execute: model={model_config.name}, provider={model_config.provider}, mock_mode={self._mock_mode}")
         if self._mock_mode or model_config.provider == LLMProvider.MOCK:
+            print(f"[LLMService] Using MOCK response")
             return self._mock_response(request, model_config)
         
         # Real OpenAI API call
@@ -531,7 +536,19 @@ class LLMService:
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
             )
-        
+
+        # Real Anthropic API call
+        if model_config.provider == LLMProvider.ANTHROPIC:
+            print(f"[LLMService] Using Anthropic provider, has_key={bool(self._anthropic_api_key)}")
+            from .anthropic_provider import AnthropicProvider
+            provider = AnthropicProvider(api_key=self._anthropic_api_key)
+            return provider.complete(
+                messages=request.messages,
+                model=model_config.name,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens,
+            )
+
         # Fallback to mock for unsupported providers
         return self._mock_response(request, model_config)
     

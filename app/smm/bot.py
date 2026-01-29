@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from app.storage import Database
 from app.llm import LLMService
+from app.llm.router import ModelRouter, RouterConfig
 from app.smm.agent import SMMAgent
 from app.smm.scheduler_tasks import SMMScheduler
 from app.kernel.task_manager import TaskLimitError
@@ -27,6 +28,7 @@ from app.kernel.task_manager import TaskLimitError
 # Config
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY")
 WEBAPP_URL = os.getenv("WEBAPP_URL", "")  # URL для Mini App (например: https://your-domain.com)
 
 # Белый список пользователей (Telegram ID)
@@ -40,7 +42,19 @@ user_usage = {}  # {tg_id: {"date": "2026-01-27", "count": 5}}
 
 # Init
 db = Database("data/smm_agent.db")
-llm = LLMService(db=db, mock_mode=False, openai_api_key=OPENAI_KEY)
+
+# Claude Sonnet для всех SMM задач
+router_config = RouterConfig(
+    primary_model="claude-sonnet-4",
+    task_model_overrides={
+        "smm": "claude-sonnet-4",
+        "smm_generate": "claude-sonnet-4",
+        "smm_analyze": "claude-sonnet-4",
+        "general": "claude-sonnet-4",  # По умолчанию тоже Claude
+    }
+)
+router = ModelRouter(config=router_config)
+llm = LLMService(db=db, router=router, mock_mode=False, openai_api_key=OPENAI_KEY, anthropic_api_key=ANTHROPIC_KEY)
 agent = SMMAgent(db=db, llm=llm)
 
 # Регистрация SMM tools в ToolRegistry
@@ -191,12 +205,48 @@ async def show_main_screen(message: Message):
     )
 
 
+def _sanitize_html(text: str) -> str:
+    """Очистка текста для Telegram HTML.
+
+    Telegram поддерживает только: <b>, <i>, <u>, <s>, <code>, <pre>, <a>
+    Все остальные < и > нужно экранировать.
+    """
+    import re
+
+    # Паттерн для разрешённых тегов Telegram
+    # <b>, </b>, <i>, </i>, <u>, </u>, <s>, </s>, <code>, </code>, <pre>, </pre>, <a href="...">, </a>
+    allowed_pattern = re.compile(
+        r'(</?(?:b|i|u|s|code|pre)>|<a\s+href="[^"]*">|</a>)',
+        re.IGNORECASE
+    )
+
+    # Разбиваем текст на части: теги и всё остальное
+    parts = allowed_pattern.split(text)
+    result = []
+
+    for i, part in enumerate(parts):
+        if i % 2 == 1:
+            # Это разрешённый тег — оставляем как есть
+            result.append(part)
+        else:
+            # Это обычный текст — экранируем спецсимволы
+            part = part.replace('&', '&amp;')
+            part = part.replace('<', '&lt;')
+            part = part.replace('>', '&gt;')
+            result.append(part)
+
+    return ''.join(result)
+
+
 async def send_post(message: Message, text: str, reply_markup=None):
     """Отправить пост с HTML-форматированием"""
     try:
-        await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+        # Сначала markdown → HTML, потом санитизация
+        html_text = _markdown_to_html(text)
+        clean_text = _sanitize_html(html_text)
+        await message.answer(clean_text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
     except Exception:
-        # Если HTML сломан — отправляем без форматирования
+        # Если HTML всё ещё сломан — отправляем без форматирования
         await message.answer(text, parse_mode=None, reply_markup=reply_markup)
 
 
@@ -271,7 +321,8 @@ def post_keyboard(task_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="✏️ Изменить", callback_data="edit"),
             InlineKeyboardButton(text="📝 Вручную", callback_data="manual_edit"),
             InlineKeyboardButton(text="🔄 Заново", callback_data="regen")
-        ]
+        ],
+        [InlineKeyboardButton(text="🗑 Удалить", callback_data="delete_msg")]
     ])
 
 
@@ -286,7 +337,8 @@ def edit_keyboard(task_id: int) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="✅ Готово", callback_data=f"pub_{task_id}"),
             InlineKeyboardButton(text="📋 В черновики", callback_data=f"draft_{task_id}")
-        ]
+        ],
+        [InlineKeyboardButton(text="🗑 Удалить", callback_data="delete_msg")]
     ])
 
 
@@ -615,14 +667,10 @@ async def _analyze_single(message: Message, user_id: int, channel: str):
 
     try:
         raw_posts, analysis = agent.analyze_single_channel(user_id, channel)
-
-        if raw_posts:
-            await message.answer(f"ПОСТЫ {channel}:\n\n{raw_posts[:3000]}", parse_mode=None)
-            await send_post(message, f"АНАЛИЗ:\n\n{analysis}")
-        else:
-            await send_post(message, analysis)
+        # Выводим только анализ, без сырых постов
+        await send_post(message, f"📊 <b>АНАЛИЗ {channel}:</b>\n\n{analysis}")
     except Exception as e:
-        await message.answer(f"Ошибка: {e}", parse_mode=None)
+        await message.answer(f"Ошибка анализа {channel}: {e}", parse_mode=None)
     finally:
         agent.cleanup()
 
@@ -638,13 +686,10 @@ async def cb_analyze_channel(callback: CallbackQuery):
         await callback.message.edit_text("Анализирую все каналы...", parse_mode=None)
         try:
             raw_posts, analysis = agent.analyze_competitors(user_id)
-            if raw_posts:
-                await callback.message.answer(f"ПОСТЫ:\n\n{raw_posts[:3000]}", parse_mode=None)
-                await send_post(callback.message, f"АНАЛИЗ:\n\n{analysis}")
-            else:
-                await send_post(callback.message, analysis)
+            # Выводим только анализ, без сырых постов
+            await send_post(callback.message, f"📊 <b>АНАЛИЗ КОНКУРЕНТОВ:</b>\n\n{analysis}")
         except Exception as e:
-            await callback.message.answer(f"Ошибка: {e}", parse_mode=None)
+            await callback.message.answer(f"Ошибка анализа: {e}", parse_mode=None)
         finally:
             agent.cleanup()
     else:
@@ -1178,7 +1223,11 @@ async def process_text_input(message: Message, text: str):
         channel = text if text.startswith("@") else f"@{text}"
         agent.add_competitor(user_id, channel)
         user_states.pop(tg_id, None)
-        await message.answer(f"Конкурент добавлен: {channel}\n\nТеперь /analyze для анализа", parse_mode=None)
+        await message.answer(
+            f"✅ Конкурент добавлен: {channel}\n\n"
+            f"💡 Анализ канала можно найти в разделе «Конкуренты» в настройках — нажми на канал чтобы увидеть анализ.",
+            parse_mode=None
+        )
         return
 
     # Добавление источника новостей
@@ -1240,7 +1289,7 @@ async def process_text_input(message: Message, text: str):
 
         increment_usage(tg_id)  # Увеличиваем счётчик
         pending_posts[tg_id] = draft
-        user_states.pop(tg_id, None)
+        user_states.pop(tg_id, None)  # Очищаем состояние
 
         await send_post(message, draft.text, reply_markup=post_keyboard(draft.task_id))
         return
@@ -1270,7 +1319,7 @@ async def process_text_input(message: Message, text: str):
 
         increment_usage(tg_id)
         pending_posts[tg_id] = draft
-        user_states.pop(tg_id, None)
+        user_states.pop(tg_id, None)  # Очищаем состояние
 
         await send_post(message, draft.text, reply_markup=post_keyboard(draft.task_id))
         return
@@ -1383,8 +1432,18 @@ async def process_text_input(message: Message, text: str):
         except TaskLimitError:
             db.execute("UPDATE tasks SET status = 'cancelled' WHERE user_id = ? AND status IN ('queued', 'running', 'paused')", (user_id,))
             draft = agent.generate_post(user_id, text)
+        except Exception as e:
+            print(f"[Bot] generate_post error: {e}")
+            import traceback
+            traceback.print_exc()
+            await message.answer(f"Ошибка генерации: {e}", parse_mode=None)
+            return
 
         pending_posts[tg_id] = draft
+
+        if not draft.text:
+            await message.answer("Не удалось сгенерировать пост. Попробуй ещё раз.", parse_mode=None)
+            return
 
         await send_post(message, draft.text, reply_markup=post_keyboard(draft.task_id))
     else:
@@ -1551,6 +1610,25 @@ async def cb_manual_edit(callback: CallbackQuery):
     await send_post(callback.message, old_draft.text)
 
 
+@dp.callback_query(F.data == "delete_msg")
+async def cb_delete_message(callback: CallbackQuery):
+    """Удалить сообщение с постом из чата"""
+    tg_id = callback.from_user.id
+
+    # Очищаем состояние
+    pending_posts.pop(tg_id, None)
+    user_states.pop(tg_id, None)
+
+    # Удаляем сообщение
+    try:
+        await callback.message.delete()
+    except Exception:
+        # Если не получилось удалить — просто убираем клавиатуру
+        await callback.message.edit_reply_markup(reply_markup=None)
+
+    await callback.answer("Удалено")
+
+
 @dp.callback_query(F.data == "rollback")
 async def cb_rollback(callback: CallbackQuery):
     """Откатить к предыдущей версии — архитектурно, без LLM"""
@@ -1574,7 +1652,15 @@ async def cb_rollback(callback: CallbackQuery):
     pending_posts[tg_id] = old_draft
     user_states[tg_id] = {"state": "editing", "versions": versions}
 
-    await send_post(callback.message, f"↩️ Откат:\n\n{new_text}", reply_markup=edit_keyboard(old_draft.task_id))
+    # Редактируем то же сообщение (не отправляем новое!)
+    # Это позволяет откатывать несколько раз подряд
+    display_text = f"↩️ Откат ({len(versions)} версий осталось):\n\n{new_text}"
+    html_text = _markdown_to_html(display_text)
+    clean_text = _sanitize_html(html_text)
+    try:
+        await callback.message.edit_text(clean_text, parse_mode=ParseMode.HTML, reply_markup=edit_keyboard(old_draft.task_id))
+    except Exception:
+        await callback.message.edit_text(display_text, parse_mode=None, reply_markup=edit_keyboard(old_draft.task_id))
     await callback.answer("Откат выполнен")
 
 

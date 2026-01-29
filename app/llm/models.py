@@ -149,16 +149,32 @@ MODELS = {
         output_price_per_million=0.60,
         max_context_tokens=128000,
     ),
-    # Anthropic
-    "claude-3-5-sonnet": ModelConfig(
-        name="claude-3-5-sonnet-20241022",
+    # Anthropic (актуальные модели 2025)
+    "claude-sonnet-4": ModelConfig(
+        name="claude-sonnet-4-20250514",
         provider=LLMProvider.ANTHROPIC,
         input_price_per_million=3.00,
         output_price_per_million=15.00,
         max_context_tokens=200000,
         supports_vision=True,
     ),
-    "claude-3-5-haiku": ModelConfig(
+    # Также по полному имени (для fallback chain)
+    "claude-sonnet-4-20250514": ModelConfig(
+        name="claude-sonnet-4-20250514",
+        provider=LLMProvider.ANTHROPIC,
+        input_price_per_million=3.00,
+        output_price_per_million=15.00,
+        max_context_tokens=200000,
+        supports_vision=True,
+    ),
+    "claude-haiku-3-5": ModelConfig(
+        name="claude-3-5-haiku-20241022",
+        provider=LLMProvider.ANTHROPIC,
+        input_price_per_million=0.80,
+        output_price_per_million=4.00,
+        max_context_tokens=200000,
+    ),
+    "claude-3-5-haiku-20241022": ModelConfig(
         name="claude-3-5-haiku-20241022",
         provider=LLMProvider.ANTHROPIC,
         input_price_per_million=0.80,

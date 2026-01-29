@@ -318,6 +318,33 @@ def register_smm_tools(
         if avg_views > 0:
             engagement = round((avg_reactions + avg_forwards) / avg_views * 100, 2)
 
+        # === АВТОМАТИЧЕСКИЙ РАСЧЁТ TEMPERATURE ===
+        # На основе метрик определяем тип канала и оптимальную температуру
+        #
+        # Аналитика/новости: длинные посты, мало эмодзи → 0.3 (точность)
+        # Экспертный: средняя длина, структура → 0.5 (баланс)
+        # Лайфстайл/авторский: короткие, эмодзи, вопросы → 0.7 (креатив)
+
+        recommended_temperature = 0.5  # default
+        content_type = "экспертный"  # default
+
+        # Аналитика: длинные + мало эмодзи + без вопросов
+        if avg_length > 500 and avg_emoji < 1.5 and "вопросы" not in hook_patterns:
+            recommended_temperature = 0.3
+            content_type = "аналитический"
+        # Развлекательный/лайфстайл: короткие + эмодзи или вопросы
+        elif avg_length < 300 and (avg_emoji > 1.5 or "вопросы" in hook_patterns):
+            recommended_temperature = 0.7
+            content_type = "лайфстайл"
+        # Новостной: любая длина + нет эмодзи + нет CTA
+        elif avg_emoji < 0.5 and cta_style == "без CTA":
+            recommended_temperature = 0.35
+            content_type = "новостной"
+        # Авторский блог: эмодзи + CTA
+        elif avg_emoji > 2 and cta_style == "есть CTA":
+            recommended_temperature = 0.6
+            content_type = "авторский"
+
         return {
             "posts_analyzed": len(organic),
             "metrics": {
@@ -338,6 +365,9 @@ def register_smm_tools(
                 "total_reactions": total_reactions,
                 "avg_forwards": avg_forwards,
                 "engagement_rate": engagement,
+                # Новые поля для автоподстройки
+                "recommended_temperature": recommended_temperature,
+                "content_type": content_type,
             },
             "examples": {
                 "hooks": first_lines[:3],

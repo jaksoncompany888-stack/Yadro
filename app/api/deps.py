@@ -18,6 +18,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.storage.database import Database
 from app.memory.service import MemoryService
 from app.llm.service import LLMService
+from app.llm.router import ModelRouter, RouterConfig
 from app.smm.agent import SMMAgent
 
 
@@ -58,8 +59,25 @@ def get_llm(db: Database = Depends(get_db)) -> LLMService:
     """Get LLM service."""
     global _llm
     if _llm is None:
-        api_key = os.environ.get("OPENAI_API_KEY")
-        _llm = LLMService(db, openai_api_key=api_key, mock_mode=False)
+        openai_key = os.environ.get("OPENAI_API_KEY")
+        anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+        # Claude Sonnet для SMM задач
+        router_config = RouterConfig(
+            primary_model="claude-sonnet-4",
+            task_model_overrides={
+                "smm": "claude-sonnet-4",
+                "smm_generate": "claude-sonnet-4",
+                "smm_analyze": "claude-sonnet-4",
+            }
+        )
+        router = ModelRouter(config=router_config)
+        _llm = LLMService(
+            db,
+            router=router,
+            openai_api_key=openai_key,
+            anthropic_api_key=anthropic_key,
+            mock_mode=False
+        )
     return _llm
 
 

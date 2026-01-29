@@ -18,7 +18,7 @@
 ## Деплой на AWS
 
 ### Создан EC2 инстанс
-- **IP:** 3.121.215.231
+- **IP:** 35.156.188.57 (Elastic IP — постоянный)
 - **Регион:** EU Frankfurt (eu-central-1)
 - **Тип:** t2.micro (Free Tier)
 - **ОС:** Ubuntu 24.04 LTS
@@ -33,7 +33,7 @@
 
 ```bash
 # Подключение к серверу
-ssh -i ~/Desktop/yadro-key.pem ubuntu@3.121.215.231
+ssh -i ~/Desktop/yadro-key.pem ubuntu@35.156.188.57
 
 # Статус бота
 sudo systemctl status yadro-bot
@@ -52,10 +52,10 @@ sudo journalctl -u yadro-bot --no-pager -n 50
 
 ```bash
 # С локального компьютера (из папки yadro-smm)
-rsync -avz --exclude 'venv' --exclude '__pycache__' --exclude '*.db' --exclude 'node_modules' --exclude '.git' -e "ssh -i ~/Desktop/yadro-key.pem" . ubuntu@3.121.215.231:~/yadro-smm/
+rsync -avz --exclude 'venv' --exclude '__pycache__' --exclude '*.db' --exclude 'node_modules' --exclude '.git' -e "ssh -i ~/Desktop/yadro-key.pem" . ubuntu@35.156.188.57:~/yadro-smm/
 
 # Затем перезапустить бот
-ssh -i ~/Desktop/yadro-key.pem ubuntu@3.121.215.231 "sudo systemctl restart yadro-bot"
+ssh -i ~/Desktop/yadro-key.pem ubuntu@35.156.188.57 "sudo systemctl restart yadro-bot"
 ```
 
 ## Архитектура
@@ -70,7 +70,7 @@ ssh -i ~/Desktop/yadro-key.pem ubuntu@3.121.215.231 "sudo systemctl restart yadr
          ▼                         ▼
 ┌──────────────────────────────────────────────┐
 │              AWS EC2 (t2.micro)              │
-│              3.121.215.231                   │
+│              35.156.188.57                   │
 │  ┌─────────────┐    ┌─────────────────────┐  │
 │  │  Telegram   │    │    FastAPI (API)    │  │
 │  │    Bot      │    │    порт 8000        │  │

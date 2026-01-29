@@ -1,6 +1,23 @@
 # Yadro SMM
 
-Telegram-бот для SMM менеджеров с AI-генерацией постов.
+Telegram-бот + веб-приложение для SMM менеджеров с AI-генерацией постов (Claude Sonnet 4).
+
+## Веб-сайт
+
+**URL:** http://35.156.188.57
+
+Веб-интерфейс для генерации постов и управления каналами. Использует то же AI-ядро что и Telegram бот.
+
+### Функции
+- **AI Агент** — генерация постов через Ядро SMM
+- **Интеграции** — подключение Telegram/VK каналов
+- **Календарь** — планирование публикаций
+- **Аналитика** — статистика постов
+
+### Технологии
+- **Frontend:** Next.js 14, Tailwind CSS (Earth Core тема)
+- **Backend:** FastAPI (общий с ботом)
+- **Деплой:** PM2 + nginx
 
 ## Структура проекта
 
@@ -9,11 +26,12 @@ yadro-smm/
 ├── app/                    # Backend
 │   ├── api/               # FastAPI REST API
 │   ├── smm/               # Telegram бот + AI агент
-│   ├── llm/               # OpenAI интеграция
+│   ├── llm/               # Claude (Anthropic) + OpenAI
+│   ├── executor/          # Plan → Steps архитектура
+│   ├── kernel/            # TaskManager, очереди
 │   ├── memory/            # Память пользователя (FTS5)
 │   ├── storage/           # SQLite база данных
-│   ├── tools/             # Инструменты (поиск, парсинг)
-│   ├── providers/         # Соцсети (Telegram, VK)
+│   ├── tools/             # Инструменты (web_search, parse_channel)
 │   └── scheduler/         # Планировщик публикаций
 ├── webapp/                 # Mini App (React + Vite)
 ├── tests/                  # Pytest тесты
@@ -21,96 +39,126 @@ yadro-smm/
 └── docs/                   # Документация
 ```
 
-## Деплой
+## Сервер
 
-**Текущая архитектура:**
-- **AWS EC2** (3.121.215.231) — бот + API
-- **Vercel** — webapp (HTTPS) + API proxy
-- **Render** — отключен
+**AWS EC2 (Free Tier до декабря 2026):**
+- **IP:** 35.156.188.57 (Elastic IP — постоянный)
+- **User:** ubuntu
+- **Бот:** /home/ubuntu/yadro-smm
+- **Веб:** /home/ubuntu/yadro-post
 
-### Команды сервера
-
-```bash
-# SSH подключение
-ssh -i ~/Desktop/yadro-key.pem ubuntu@3.121.215.231
-
-# Управление ботом
-sudo systemctl status yadro-bot
-sudo systemctl restart yadro-bot
-sudo journalctl -u yadro-bot -f
-
-# Обновление кода
-rsync -avz --exclude 'venv' --exclude '__pycache__' --exclude '*.db' \
-  -e "ssh -i ~/Desktop/yadro-key.pem" . ubuntu@3.121.215.231:~/yadro-smm/
-ssh -i ~/Desktop/yadro-key.pem ubuntu@3.121.215.231 "sudo systemctl restart yadro-bot"
-```
-
-## Локальная разработка
+### SSH подключение
 
 ```bash
-# Установка
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# Запуск бота + API
-python run_all.py
-
-# Тесты
-pytest tests/ -v
+ssh -i ~/Desktop/yadro-key.pem ubuntu@35.156.188.57
 ```
+
+### Управление сервисами
+
+```bash
+# Telegram бот (systemd)
+systemctl status yadro-bot
+systemctl restart yadro-bot
+journalctl -u yadro-bot -f
+
+# Веб-сайт (PM2)
+pm2 list                    # Статус всех процессов
+pm2 logs yadro-web          # Логи фронтенда
+pm2 restart yadro-web       # Рестарт фронтенда
+```
+
+### Деплой (из локальной папки)
+
+```bash
+./deploy.sh
+```
+
+Скрипт делает:
+1. rsync файлов (исключая venv, __pycache__, *.db, .env)
+2. systemctl restart yadro-bot
 
 ## Ключевые файлы
 
 | Файл | Назначение |
 |------|-----------|
-| `app/smm/bot.py` | Telegram бот (aiogram) |
-| `app/smm/agent.py` | AI агент генерации постов |
+| `app/smm/bot.py` | Telegram бот (aiogram 3.x) |
+| `app/smm/agent.py` | AI агент — генерация, редактирование |
+| `app/executor/step_executor.py` | Выполнение шагов (LLM, tools) |
+| `app/executor/plan_manager.py` | Создание планов (smm_generate, smm_analyze) |
+| `app/tools/smm_tools.py` | Инструменты (web_search, parse_channel, compute_metrics) |
 | `app/api/app.py` | FastAPI приложение |
-| `run_all.py` | Запуск бота + API вместе |
+| `run_all.py` | Запуск бота + API |
+| `deploy.sh` | Деплой на сервер |
 
-## Переменные окружения
+## Переменные окружения (на сервере в .env)
 
 ```env
-TELEGRAM_BOT_TOKEN=...
-OPENAI_API_KEY=...
-WEBAPP_URL=https://yadro-six.vercel.app
-APP_ENV=development
+TELEGRAM_BOT_TOKEN=8499179297:AAFDb...
+ANTHROPIC_API_KEY=sk-ant-api03-uvD7C1m...
+OPENAI_API_KEY=sk-proj-...
 ```
 
-## Правила разработки
+## Архитектура генерации постов
 
-- **Архитектура > Промпты** — логика в коде, LLM только исполняет
-- **Инкрементальные изменения** — не ломать работающий код
-- **Тесты обязательны** — 300+ тестов должны проходить
+```
+Тема → Plan (smm_generate) → Steps:
+  1. memory_search — похожие посты из памяти
+  2. web_search — актуальные данные из DuckDuckGo
+  3. LLM_CALL (Claude) — генерация поста
+  4. _apply_style_postprocess — жирный заголовок, эмодзи
+```
 
-## Whitelist (тестирование)
+## Автоподстройка температуры
+
+При анализе канала (`/competitor @channel`) автоматически определяется:
+- **content_type**: аналитический, новостной, лайфстайл, авторский, экспертный
+- **recommended_temperature**: 0.3-0.7
+
+Логика в `app/tools/smm_tools.py` → `compute_channel_metrics()`:
+- Длинные + мало эмодзи → аналитический (0.3)
+- Короткие + эмодзи → лайфстайл (0.7)
+- Без эмодзи + без CTA → новостной (0.35)
+
+## Инсайты от конкурентов
+
+При генерации используются ИНСАЙТЫ (темы, идеи), но НЕ копируется стиль.
+Метод `_extract_competitor_insights()` в `agent.py` фильтрует:
+- ✅ Оставляет: темы, хуки, что работает
+- ❌ Убирает: лицо повествования, структуру, эмодзи-паттерны
+
+## Whitelist
 
 ```python
 ALLOWED_USER_IDS = {140942228, 275622001, 727559198, 774618452}
-DAILY_LIMIT = 50  # постов в день на пользователя
 ```
 
-Whitelist проверяется через `WhitelistMiddleware` на ВСЕ сообщения и callback'и.
+## Последние изменения (2026-01-29)
 
-## Последние изменения (2026-01-27)
+### Веб-сайт (yadro-post)
+- **Задеплоен веб-интерфейс** на http://35.156.188.57
+- **Earth Core тема** — оранжево-красные цвета ядра Земли
+- **Тёмная/светлая тема** — переключатель в сайдбаре
+- **AI Агент** — генерация через Ядро SMM API
+- **PM2 + nginx** — production деплой
 
-- **Метрики анализа каналов**: подписчики, просмотры, реакции, engagement rate
-- **Парсинг реакций**: `.tgme_reaction` вместо `.tgme_widget_message_reaction_count`
-- **Graceful shutdown**: `TimeoutStopSec=10`, signal handler в `run_all.py`
-- **Callback timeout fix**: `callback.answer()` вызывается сразу перед анализом
-- **Edit вместо send**: результат анализа редактирует сообщение, а не создаёт новое
+### Бот (yadro-smm)
+- **Claude Sonnet 4** как основная модель для генерации
+- **Автоподстройка temperature** на основе метрик канала
+- **Инсайты вместо копирования стиля** конкурентов
+- **Дефолтное форматирование** — жирный заголовок + эмодзи по теме
+- **Откат версий** — можно откатить несколько раз
+- **Нормализация коротких команд** — "короче" → "сделай текст короче"
 
 ## Известные проблемы
 
-- SSH соединение часто рвётся на долгих операциях
-- Анализ канала занимает 10-30 сек (LLM + парсинг)
+- SSH может зависать если sshd перегружен (решение: reboot через AWS Console)
+- Анализ канала 10-30 сек (LLM + парсинг)
 
-## Следующие шаги
+## AWS Console
 
-1. Тестирование с друзьями, сбор фидбека
-2. Мониторинг падений (Telegram уведомления)
-3. Кеширование анализа каналов
-4. VK интеграция
+Если SSH не работает:
+1. console.aws.amazon.com → EC2 → Instances
+2. Найти инстанс yadro-smm (35.156.188.57)
+3. Connect → EC2 Instance Connect
 
 Детальная архитектура: `docs/ARCHITECTURE.md`

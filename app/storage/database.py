@@ -50,20 +50,41 @@ class Database:
     def _get_connection(self) -> sqlite3.Connection:
         """Get thread-local connection."""
         if not hasattr(self._local, 'connection') or self._local.connection is None:
-            conn = sqlite3.connect(
-                str(self._db_path),
-                check_same_thread=False,
-                timeout=5.0,
-            )
-            conn.row_factory = sqlite3.Row
-            
-            # Enable foreign keys and WAL mode
+            # Проверяем целостность базы перед подключением
+            try:
+                conn = sqlite3.connect(
+                    str(self._db_path),
+                    check_same_thread=False,
+                    timeout=5.0,
+                )
+                conn.row_factory = sqlite3.Row
+                # Проверка целостности
+                result = conn.execute("PRAGMA integrity_check").fetchone()
+                if result[0] != "ok":
+                    conn.close()
+                    raise sqlite3.DatabaseError("Database corrupted")
+            except sqlite3.DatabaseError:
+                # База повреждена — удаляем и создаём заново
+                import os
+                for ext in ['', '-shm', '-wal']:
+                    path = str(self._db_path) + ext
+                    if os.path.exists(path):
+                        os.remove(path)
+                conn = sqlite3.connect(
+                    str(self._db_path),
+                    check_same_thread=False,
+                    timeout=5.0,
+                )
+                conn.row_factory = sqlite3.Row
+
+            # Enable foreign keys, use DELETE mode (safer than WAL on small servers)
             conn.execute("PRAGMA foreign_keys = ON")
-            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA journal_mode = DELETE")  # Безопаснее WAL для t2.micro
             conn.execute("PRAGMA busy_timeout = 5000")
-            
+            conn.execute("PRAGMA synchronous = NORMAL")
+
             self._local.connection = conn
-        
+
         return self._local.connection
     
     @property

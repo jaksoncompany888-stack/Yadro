@@ -178,6 +178,7 @@ class PlanManager:
         topic = input_text or input_data.get("topic", "")
         smm_context = input_data.get("smm_context", "")
         skip_web_search = input_data.get("skip_web_search", False)
+        recommended_temperature = input_data.get("recommended_temperature", 0.5)
 
         steps = []
 
@@ -216,6 +217,7 @@ class PlanManager:
                 "input_text": topic,
                 "smm_context": smm_context,
                 "user_id": user_id,
+                "recommended_temperature": recommended_temperature,
             },
             depends_on=depends_on,
         )
