@@ -184,4 +184,16 @@ Referrer-Policy: strict-origin-when-cross-origin
 2. Найти инстанс yadro-smm (35.156.188.57)
 3. Connect → EC2 Instance Connect
 
-Детальная архитектура: `docs/ARCHITECTURE.md`
+## Документация
+
+- **Архитектура**: `docs/ARCHITECTURE.md`
+- **Доступ к серверу**: `docs/SERVER_ACCESS.md`
+- **Решение проблем**: `docs/TROUBLESHOOTING.md`
+
+## Локальные пути (Mac)
+
+```
+/Users/mac/Desktop/yadro-smm      # Бэкенд + бот
+/Users/mac/Desktop/yadro-post     # Фронтенд
+/Users/mac/Desktop/yadro-key.pem  # SSH ключ для AWS
+```

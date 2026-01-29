@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from .posts import router as posts_router
 from .calendar import router as calendar_router
 from .channels import router as channels_router
+from .user_channels import router as user_channels_router
 from .deps import get_db
 
 
@@ -67,6 +68,7 @@ def create_app() -> FastAPI:
     app.include_router(posts_router, prefix="/api")
     app.include_router(calendar_router, prefix="/api")
     app.include_router(channels_router, prefix="/api")
+    app.include_router(user_channels_router, prefix="/api")
 
     # Health check
     @app.get("/health")
@@ -83,6 +85,7 @@ def create_app() -> FastAPI:
                 "posts": "/api/posts",
                 "calendar": "/api/calendar",
                 "channels": "/api/channels",
+                "user_channels": "/api/user-channels",
                 "generate": "/api/posts/generate",
                 "edit": "/api/posts/edit",
                 "analyze": "/api/channels/analyze",
